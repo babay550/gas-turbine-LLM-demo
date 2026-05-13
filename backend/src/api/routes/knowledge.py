@@ -1,9 +1,14 @@
-"""模型与知识库 API — 小模型接口注册、知识库管理。"""
+"""模型与知识库 API — 小模型接口注册、知识库管理、Wiki 知识体系。"""
 
 import httpx
+import os
+import shutil
 from datetime import datetime
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter, UploadFile, File, Form, Request, Query
+from fastapi.responses import JSONResponse
 from typing import Optional
+
+from src.data.expert_rules_data import EXPERT_RULES, CAUSAL_GRAPH
 
 router = APIRouter()
 
@@ -115,93 +120,12 @@ KNOWLEDGE_BASE = {
             "content_type": "text",
         },
     ],
-    "expert_rules": [
-        {
-            "id": "R001",
-            "name": "排气温度超限预警规则",
-            "condition": "透平出口温度 T4 > 580°C 且持续 3 个采样周期",
-            "conclusion": "燃烧器状态异常或燃气品质变化，可能导致透平叶片过热",
-            "confidence": 0.85,
-            "severity": "高",
-            "related_params": ["透平出口温度_T4", "透平进口温度_T3", "天然气瞬时流量", "排烟含氧量"],
-            "recommended_actions": "1. 立即检查 T4 温度分布是否均匀\n2. 对比 T3 温度判断是否燃烧室侧异常\n3. 检查燃料流量和热值是否突变\n4. 若 T4 > 600°C 触发降负荷保护",
-        },
-        {
-            "id": "R002",
-            "name": "压气机效率劣化诊断规则",
-            "condition": "压气机等熵效率 < 86% 或较基准值下降超过 2 个百分点",
-            "conclusion": "叶片积垢或入口滤网堵塞，导致压气机性能下降",
-            "confidence": 0.80,
-            "severity": "中",
-            "related_params": ["压气机进口温度_T1", "压气机进口压力_P1", "压气机出口温度_T2", "压气机出口压力_P2", "空气流量"],
-            "recommended_actions": "1. 检查压气机入口滤网压差\n2. 安排在线清洗（50~70% 负荷下执行）\n3. 若在线清洗无效，安排离线清洗\n4. 复核空气过滤器滤芯状态",
-        },
-        {
-            "id": "R003",
-            "name": "热耗率偏离设计值规则",
-            "condition": "热耗率偏差 > 200 kJ/kWh（偏离设计值 > 2.5%）",
-            "conclusion": "综合性能劣化，需逐级分解定位：压气机/燃烧室/透平/余热锅炉",
-            "confidence": 0.90,
-            "severity": "中",
-            "related_params": ["天然气瞬时流量", "天然气低位热值", "发电机有功功率", "透平出口温度_T4"],
-            "recommended_actions": "1. 执行逐级分解分析，定位效率损失最大环节\n2. 对比各部件效率与设计值偏差\n3. 检查燃料热值是否有变化\n4. 评估是否需要安排检修",
-        },
-        {
-            "id": "R004",
-            "name": "振动超限紧急规则",
-            "condition": "振动_轴向 > 7.0 mm/s 或 振动_垂向 > 7.0 mm/s",
-            "conclusion": "转子系统异常（不平衡/不对中/轴承故障），需立即处置",
-            "confidence": 0.92,
-            "severity": "高",
-            "related_params": ["振动_轴向", "振动_垂向", "发电机有功功率"],
-            "recommended_actions": "1. 振动 > 11 mm/s 立即跳闸停机\n2. 7~11 mm/s 降负荷至 50% 并安排检修\n3. 频谱分析确定振动主导频率\n4. 检查轴承温度和润滑油系统",
-        },
-        {
-            "id": "R005",
-            "name": "余热锅炉效率下降规则",
-            "condition": "HRB 出口烟温 > 120°C（较设计值升高 20°C 以上）",
-            "conclusion": "余热锅炉换热效率下降，可能原因：管束积灰/结垢、给水品质劣化、管束泄漏",
-            "confidence": 0.78,
-            "severity": "中",
-            "related_params": ["HRB进口烟温", "HRB出口烟温", "HRB蒸汽温度", "HRB蒸汽压力", "主蒸汽流量"],
-            "recommended_actions": "1. 对比进出口烟温差变化趋势\n2. 检查蒸汽流量是否异常减少\n3. 检查给水品质是否合格\n4. 若怀疑管束泄漏，安排停炉检查",
-        },
-        {
-            "id": "R006",
-            "name": "排放超标预警规则",
-            "condition": "CO排放 > 15 ppm 或 未燃碳氢 > 8 ppm",
-            "conclusion": "燃烧不充分，可能导致燃烧室部件损坏和环保超标",
-            "confidence": 0.88,
-            "severity": "中",
-            "related_params": ["CO排放", "未燃碳氢", "排烟含氧量", "天然气瞬时流量", "透平进口温度_T3"],
-            "recommended_actions": "1. 检查排烟含氧量是否异常偏低\n2. 核实燃烧器燃料-空气配比\n3. 检查燃料喷嘴是否堵塞\n4. 评估燃烧器是否需要清洗或更换",
-        },
-    ],
+    "expert_rules": EXPERT_RULES,
     "vector_kb_sources": [
         {"id": "V001", "name": "燃机运维向量知识库", "url": "http://192.168.1.200:8001/api/vectors", "embedding_model": "bge-large-zh", "doc_count": 1240, "status": "connected"},
         {"id": "V002", "name": "设备手册知识库", "url": "http://192.168.1.200:8002/api/vectors", "embedding_model": "bge-large-zh", "doc_count": 356, "status": "disconnected"},
     ],
-    "causal_graph": {
-        "nodes": [
-            {"id": "n1", "name": "热耗率偏高", "type": "symptom"},
-            {"id": "n2", "name": "压气机效率下降", "type": "subsystem"},
-            {"id": "n3", "name": "燃烧效率下降", "type": "subsystem"},
-            {"id": "n4", "name": "透平效率下降", "type": "subsystem"},
-            {"id": "n5", "name": "叶片积垢", "type": "root_cause"},
-            {"id": "n6", "name": "入口滤网堵塞", "type": "root_cause"},
-            {"id": "n7", "name": "喷嘴堵塞", "type": "root_cause"},
-            {"id": "n8", "name": "叶片磨损", "type": "root_cause"},
-        ],
-        "edges": [
-            {"source": "n1", "target": "n2", "weight": 0.4},
-            {"source": "n1", "target": "n3", "weight": 0.3},
-            {"source": "n1", "target": "n4", "weight": 0.3},
-            {"source": "n2", "target": "n5", "weight": 0.6},
-            {"source": "n2", "target": "n6", "weight": 0.4},
-            {"source": "n3", "target": "n7", "weight": 0.7},
-            {"source": "n4", "target": "n8", "weight": 0.8},
-        ],
-    },
+    "causal_graph": CAUSAL_GRAPH,
 }
 
 
@@ -273,7 +197,7 @@ async def test_model_connection(model_id: str):
 
 @router.get("/knowledge/maintenance")
 async def get_maintenance_knowledge(category: str = None):
-    """获取检维修知识条目。"""
+    """获取技术知识条目。"""
     items = KNOWLEDGE_BASE["maintenance"]
     if category:
         items = [k for k in items if k["category"] == category]
@@ -288,7 +212,7 @@ async def add_maintenance_knowledge(
     keywords: str = Form(""),
     file: Optional[UploadFile] = File(None),
 ):
-    """添加检维修知识条目（支持文本 + 文件上传）。"""
+    """添加技术知识条目（支持文本 + 文件上传）。"""
     import os
     new_id = f"K{str(len(KNOWLEDGE_BASE['maintenance']) + 1).zfill(3)}"
     content_type = "text"
@@ -372,3 +296,311 @@ async def test_vector_kb_connection(source_id: str):
 async def get_causal_graph():
     """获取因果图定义。"""
     return KNOWLEDGE_BASE["causal_graph"]
+
+
+# =========================================================================
+# Wiki 知识库 API — 基于 Karpathy 知识管理范式
+# =========================================================================
+
+
+def _get_wiki_manager(request: Request):
+    """从 app.state 获取 WikiManager 实例。"""
+    return request.app.state.wiki_manager
+
+
+@router.post("/knowledge/wiki/upload")
+async def upload_wiki_document(
+    request: Request,
+    file: UploadFile = File(...),
+    auto_generate: bool = Form(True),
+):
+    """上传文档到技术知识库 → 解析 → LLM 生成 wiki 词条（同步）。"""
+    wiki_mgr = _get_wiki_manager(request)
+
+    # 1. 保存文件到 raw/
+    raw_dir = wiki_mgr.raw_dir
+    safe_name = os.path.basename(file.filename or "unknown")
+    file_path = os.path.join(raw_dir, safe_name)
+    with open(file_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    if not auto_generate:
+        wiki_mgr.append_log("文档上传", f"文件 {safe_name} 已存入 raw/，未自动生成词条")
+        return {
+            "success": True,
+            "source_file": safe_name,
+            "entries_created": 0,
+            "entry_ids": [],
+            "processing_time_ms": 0,
+            "message": "文档已上传到 raw/ 目录，未自动生成 wiki 词条",
+        }
+
+    # 2. 解析文档
+    from src.knowledge.document_parser import DocumentParser
+    assets_dir = os.path.join(raw_dir, "assets")
+    parser = DocumentParser(assets_dir)
+    parsed = parser.parse(file_path)
+
+    # 3. LLM 生成 wiki 词条
+    from src.knowledge.wiki_generator import WikiGenerator
+    generator = WikiGenerator(wiki_mgr)
+    result = await generator.process_document(file_path, parsed)
+    return result
+
+
+@router.get("/knowledge/wiki/entries")
+async def list_wiki_entries(
+    request: Request,
+    type: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    tag: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    """列出 wiki 词条，支持筛选和分页。"""
+    wiki_mgr = _get_wiki_manager(request)
+    entries, total = wiki_mgr.list_entries(
+        entry_type=type, category=category, tag=tag, search=search,
+        page=page, page_size=page_size,
+    )
+    return {"entries": entries, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/knowledge/wiki/entries/{entry_id}")
+async def get_wiki_entry(request: Request, entry_id: str):
+    """获取单个 wiki 词条详情。"""
+    wiki_mgr = _get_wiki_manager(request)
+    entry = wiki_mgr.get_entry(entry_id)
+    if not entry:
+        return JSONResponse(status_code=404, content={"error": f"词条 {entry_id} 不存在"})
+    return {
+        "id": entry.id,
+        "title": entry.title,
+        "type": entry.type,
+        "category": entry.category,
+        "tags": entry.tags,
+        "equipment": entry.frontmatter.get("equipment", ""),
+        "severity": entry.frontmatter.get("severity", ""),
+        "source_file": entry.frontmatter.get("source_file", ""),
+        "concept_subcategory": entry.frontmatter.get("concept_subcategory", ""),
+        "related_entries": entry.frontmatter.get("related_entries", []),
+        "created": entry.frontmatter.get("created", ""),
+        "updated": entry.frontmatter.get("updated", ""),
+        "content": entry.content,
+    }
+
+
+@router.put("/knowledge/wiki/entries/{entry_id}")
+async def update_wiki_entry(request: Request, entry_id: str, body: dict):
+    """更新 wiki 词条。"""
+    wiki_mgr = _get_wiki_manager(request)
+    fm_updates = {}
+    for key in ["title", "type", "category", "tags", "equipment", "severity", "concept_subcategory", "related_entries"]:
+        if key in body:
+            fm_updates[key] = body[key]
+    content = body.get("content")
+    entry = wiki_mgr.update_entry(entry_id, fm_updates, content)
+    if not entry:
+        return JSONResponse(status_code=404, content={"error": f"词条 {entry_id} 不存在"})
+    wiki_mgr.append_log("词条更新", f"更新词条 {entry_id}: {entry.title}")
+    return {"success": True, "id": entry_id}
+
+
+@router.delete("/knowledge/wiki/entries/{entry_id}")
+async def delete_wiki_entry(request: Request, entry_id: str):
+    """删除 wiki 词条。"""
+    wiki_mgr = _get_wiki_manager(request)
+    ok = wiki_mgr.delete_entry(entry_id)
+    if not ok:
+        return JSONResponse(status_code=404, content={"error": f"词条 {entry_id} 不存在"})
+    wiki_mgr.append_log("词条删除", f"删除词条 {entry_id}")
+    return {"success": True, "id": entry_id}
+
+
+@router.get("/knowledge/wiki/categories")
+async def get_wiki_categories(request: Request):
+    """获取所有分类。"""
+    wiki_mgr = _get_wiki_manager(request)
+    return {"categories": wiki_mgr.get_categories()}
+
+
+@router.get("/knowledge/wiki/tags")
+async def get_wiki_tags(request: Request):
+    """获取所有标签。"""
+    wiki_mgr = _get_wiki_manager(request)
+    return {"tags": wiki_mgr.get_tags()}
+
+
+@router.get("/knowledge/wiki/stats")
+async def get_wiki_stats(request: Request):
+    """获取 wiki 统计信息。"""
+    wiki_mgr = _get_wiki_manager(request)
+    return wiki_mgr.get_stats()
+
+
+@router.get("/knowledge/wiki/index")
+async def get_wiki_index(request: Request):
+    """获取内容索引。"""
+    wiki_mgr = _get_wiki_manager(request)
+    return {"content": wiki_mgr.get_index()}
+
+
+@router.get("/knowledge/wiki/log")
+async def get_wiki_log(request: Request):
+    """获取操作日志。"""
+    wiki_mgr = _get_wiki_manager(request)
+    return {"content": wiki_mgr.get_log()}
+
+
+@router.post("/knowledge/wiki/qa")
+async def wiki_qa(request: Request):
+    """基于 wiki 知识库的问答。"""
+    body = await request.json()
+    query = body.get("query", "")
+    if not query:
+        return {"answer": "请输入问题", "citations": []}
+
+    wiki_mgr = _get_wiki_manager(request)
+    from src.knowledge.wiki_qa import WikiQA
+    qa = WikiQA(wiki_mgr)
+    result = await qa.answer(query)
+    return result
+
+
+@router.post("/knowledge/wiki/rebuild-index")
+async def rebuild_wiki_index(request: Request):
+    """重建 wiki 索引。"""
+    wiki_mgr = _get_wiki_manager(request)
+    wiki_mgr.rebuild_index()
+    wiki_mgr.append_log("索引重建", "手动触发索引重建")
+    return {"success": True, "message": "索引已重建"}
+
+
+# =========================================================================
+# Raw 文件查看
+# =========================================================================
+
+
+@router.get("/knowledge/wiki/raw-files")
+async def list_raw_files(request: Request):
+    """列出 raw/ 目录下所有文件。"""
+    wiki_mgr = _get_wiki_manager(request)
+    raw_dir = wiki_mgr.raw_dir
+    files = []
+    if not os.path.isdir(raw_dir):
+        return {"files": [], "total": 0}
+    for fname in sorted(os.listdir(raw_dir)):
+        fpath = os.path.join(raw_dir, fname)
+        if os.path.isdir(fpath):
+            continue
+        stat = os.stat(fpath)
+        ext = os.path.splitext(fname)[1].lower()
+        files.append({
+            "name": fname,
+            "size": stat.st_size,
+            "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            "type": ext.lstrip(".") or "unknown",
+        })
+    return {"files": files, "total": len(files)}
+
+
+@router.get("/knowledge/wiki/raw-files/{filename:path}")
+async def get_raw_file(request: Request, filename: str):
+    """查看/下载 raw 文件。md 文件返回文本内容，其他返回文件流。"""
+    from fastapi.responses import FileResponse as FR
+
+    wiki_mgr = _get_wiki_manager(request)
+    fpath = os.path.join(wiki_mgr.raw_dir, filename)
+    if not os.path.isfile(fpath):
+        return JSONResponse(status_code=404, content={"error": "文件不存在"})
+
+    if filename.lower().endswith(".md"):
+        with open(fpath, "r", encoding="utf-8") as f:
+            content = f.read()
+        return {"filename": filename, "content": content, "type": "markdown"}
+    return FR(fpath, filename=os.path.basename(filename))
+
+
+# =========================================================================
+# Wiki 知识图谱
+# =========================================================================
+
+
+@router.get("/knowledge/wiki/graph")
+async def get_wiki_graph(request: Request):
+    """返回 wiki 词条关系图谱数据。"""
+    wiki_mgr = _get_wiki_manager(request)
+    all_entries = wiki_mgr._scan_all_files()
+    if not all_entries:
+        return {"nodes": [], "edges": []}
+
+    type_colors = {
+        "content_summary": "#409eff",
+        "entity": "#67c23a",
+        "concept": "#e6a23c",
+        "comparative": "#f56c6c",
+        "overview": "#9b59b6",
+    }
+    type_labels = {
+        "content_summary": "内容摘要",
+        "entity": "实体词条",
+        "concept": "概念词条",
+        "comparative": "对比分析",
+        "overview": "总览综述",
+    }
+
+    nodes = []
+    for entry in all_entries:
+        nodes.append({
+            "id": entry.id,
+            "name": entry.title,
+            "type": entry.type,
+            "category": entry.category,
+            "color": type_colors.get(entry.type, "#909399"),
+            "label": type_labels.get(entry.type, entry.type),
+        })
+
+    # 构建边：基于 tags 交集 + category + related_entries + source_file
+    edge_set: dict[tuple, float] = {}
+    n = len(all_entries)
+
+    def add_edge(src: str, tgt: str, weight: float):
+        key = (min(src, tgt), max(src, tgt))
+        edge_set[key] = max(edge_set.get(key, 0), weight)
+
+    for i in range(n):
+        ei = all_entries[i]
+        for j in range(i + 1, n):
+            ej = all_entries[j]
+            # tags 交集
+            common_tags = set(ei.tags) & set(ej.tags)
+            if common_tags:
+                add_edge(ei.id, ej.id, min(len(common_tags) * 0.3, 1.0))
+            # 同 category
+            if ei.category and ei.category == ej.category:
+                add_edge(ei.id, ej.id, 0.2)
+            # 同 source_file
+            sf_i = ei.frontmatter.get("source_file", "")
+            sf_j = ej.frontmatter.get("source_file", "")
+            if sf_i and sf_i == sf_j and sf_i != "initial_migration":
+                add_edge(ei.id, ej.id, 0.15)
+
+    # related_entries 显式关联
+    for entry in all_entries:
+        for ref_id in entry.frontmatter.get("related_entries", []):
+            if any(e.id == ref_id for e in all_entries):
+                add_edge(entry.id, ref_id, 0.8)
+
+    edges = [{"source": s, "target": t, "weight": round(w, 2)} for (s, t), w in edge_set.items()]
+
+    # 计算每个节点的度数
+    degree: dict[str, int] = {n_["id"]: 0 for n_ in nodes}
+    for e in edges:
+        degree[e["source"]] = degree.get(e["source"], 0) + 1
+        degree[e["target"]] = degree.get(e["target"], 0) + 1
+    for node in nodes:
+        node["degree"] = degree.get(node["id"], 0)
+
+    return {"nodes": nodes, "edges": edges}

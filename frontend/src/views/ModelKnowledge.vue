@@ -6,7 +6,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { GraphChart } from 'echarts/charts'
 import { TitleComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import * as api from '../api'
-import type { ModelEntry, MaintenanceKnowledge, ExpertRule, CausalGraph, CausalNode, VectorKBSource, ModelTestResult } from '../types'
+import type { ModelEntry, ExpertRule, CausalGraph, CausalNode, VectorKBSource, ModelTestResult, WikiEntryMeta, WikiEntry, WikiStatsResponse, RawFileInfo, WikiGraphData } from '../types'
 import { ElMessage } from 'element-plus'
 
 use([CanvasRenderer, GraphChart, TitleComponent, TooltipComponent, LegendComponent])
@@ -19,15 +19,55 @@ const modelTotal = ref(0)
 const modelTestResults = ref<Record<string, ModelTestResult>>({})
 const modelTesting = ref<Record<string, boolean>>({})
 
-const knowledgeSubTab = ref('maintenance')
-const maintenanceItems = ref<MaintenanceKnowledge[]>([])
-const maintenanceTotal = ref(0)
+const knowledgeSubTab = ref('tech-kb')
 const expertRules = ref<ExpertRule[]>([])
 const expertRulesTotal = ref(0)
 const causalGraph = ref<CausalGraph | null>(null)
 
 const vectorSources = ref<VectorKBSource[]>([])
 const vectorTotal = ref(0)
+
+// --- Wiki 技术知识库状态 ---
+const wikiEntries = ref<WikiEntryMeta[]>([])
+const wikiTotal = ref(0)
+const wikiStats = ref<WikiStatsResponse | null>(null)
+const wikiSearch = ref('')
+const wikiFilterType = ref('')
+const wikiFilterCategory = ref('')
+const wikiLoading = ref(false)
+const wikiCurrentPage = ref(1)
+const wikiPageSize = ref(20)
+
+const showWikiDetail = ref(false)
+const currentWikiEntry = ref<WikiEntry | null>(null)
+const wikiDetailLoading = ref(false)
+
+const showWikiUploadDialog = ref(false)
+const wikiUploading = ref(false)
+
+const showWikiQADialog = ref(false)
+const wikiQAQuery = ref('')
+const wikiQAAnswer = ref('')
+const wikiQACitations = ref<any[]>([])
+const wikiQALoading = ref(false)
+
+// --- Raw 文件查看 ---
+const showRawFilesDrawer = ref(false)
+const rawFiles = ref<RawFileInfo[]>([])
+const rawFilesLoading = ref(false)
+const showRawContentDialog = ref(false)
+const rawContentTitle = ref('')
+const rawContentText = ref('')
+
+// --- Wiki 索引/日志查看 ---
+const showIndexDialog = ref(false)
+const indexContent = ref('')
+const showLogDialog = ref(false)
+const logContent = ref('')
+
+// --- Wiki 知识图谱 ---
+const wikiGraphData = ref<WikiGraphData | null>(null)
+const wikiGraphLoading = ref(false)
 
 // --- Detail drawers ---
 const showMaintenanceDetail = ref(false)
@@ -38,13 +78,6 @@ const currentRule = ref<ExpertRule | null>(null)
 // --- Add forms ---
 const showModelDialog = ref(false)
 const modelForm = reactive({ name: '', url: '', method: 'POST', input_params_text: '', output_format: '' })
-
-const showMaintenanceDialog = ref(false)
-const maintenanceForm = reactive({
-  title: '', category: '', type: '', equipment: '', severity: '中',
-  keywords_text: '', symptoms: '', analysis: '', solution: '', prevention: '',
-  file: null as File | null,
-})
 
 const showRuleDialog = ref(false)
 const ruleForm = reactive({
@@ -67,17 +100,32 @@ function severityType(s?: string) {
   return 'info'
 }
 
+// --- Wiki type labels ---
+const wikiTypeLabels: Record<string, string> = {
+  content_summary: '内容摘要',
+  entity: '实体词条',
+  concept: '概念词条',
+  comparative: '对比分析',
+  overview: '总览综述',
+}
+function wikiTypeTag(type: string) {
+  const map: Record<string, string> = { content_summary: '', entity: 'success', concept: 'warning', comparative: 'danger', overview: 'info' }
+  return map[type] || ''
+}
+
 // --- Causal Graph Chart ---
 const graphOption = computed(() => {
   if (!causalGraph.value) return {}
   const { nodes, edges } = causalGraph.value
-  const colorMap: Record<string, string> = { symptom: '#e6a23c', subsystem: '#409eff', root_cause: '#f56c6c' }
-  const categoryIndex: Record<string, number> = { symptom: 0, subsystem: 1, root_cause: 2 }
+  const colorMap: Record<string, string> = { symptom: '#e6a23c', subsystem: '#409eff', root_cause: '#f56c6c', trigger_rule: '#9b59b6' }
+  const categoryIndex: Record<string, number> = { symptom: 0, subsystem: 1, root_cause: 2, trigger_rule: 3 }
   const categories = [
     { name: '征兆', itemStyle: { color: '#e6a23c' } },
     { name: '子系统', itemStyle: { color: '#409eff' } },
     { name: '根因', itemStyle: { color: '#f56c6c' } },
+    { name: '触发规则', itemStyle: { color: '#9b59b6' } },
   ]
+  const symSize = (t: string) => t === 'trigger_rule' ? 28 : t === 'root_cause' ? 50 : t === 'subsystem' ? 40 : 30
   return {
     tooltip: {},
     legend: { data: categories.map(c => c.name), top: 0, selectedMode: false },
@@ -85,10 +133,10 @@ const graphOption = computed(() => {
       type: 'graph', layout: 'force',
       data: nodes.map((n: CausalNode) => ({
         id: n.id, name: `${n.name}\n(${n.id})`,
-        symbolSize: n.type === 'root_cause' ? 50 : n.type === 'subsystem' ? 40 : 30,
+        symbolSize: symSize(n.type),
         itemStyle: { color: colorMap[n.type] ?? '#909399' },
         category: categoryIndex[n.type] ?? 0,
-        label: { show: true, fontSize: 11 },
+        label: { show: true, fontSize: n.type === 'trigger_rule' ? 9 : 11 },
       })),
       links: edges.map(e => ({ source: e.source, target: e.target, lineStyle: { width: Math.max(1, e.weight * 3), opacity: 0.7, curveness: 0.2 } })),
       categories, roam: true, draggable: true,
@@ -112,11 +160,25 @@ async function loadModels() {
   finally { loading.value = false }
 }
 
-async function loadMaintenanceKnowledge() {
-  loading.value = true
-  try { const r = await api.getMaintenanceKnowledge(); maintenanceItems.value = r.items; maintenanceTotal.value = r.total }
-  catch (e: unknown) { ElMessage.error(e instanceof Error ? e.message : String(e)) }
-  finally { loading.value = false }
+async function loadWikiEntries() {
+  wikiLoading.value = true
+  try {
+    const r = await api.getWikiEntries({
+      search: wikiSearch.value || undefined,
+      type: wikiFilterType.value || undefined,
+      category: wikiFilterCategory.value || undefined,
+      page: wikiCurrentPage.value,
+      page_size: wikiPageSize.value,
+    })
+    wikiEntries.value = r.entries
+    wikiTotal.value = r.total
+  } catch (e: unknown) { ElMessage.error(e instanceof Error ? e.message : String(e)) }
+  finally { wikiLoading.value = false }
+}
+
+async function loadWikiStats() {
+  try { wikiStats.value = await api.getWikiStats() }
+  catch { /* ignore */ }
 }
 
 async function loadExpertRules() {
@@ -143,7 +205,7 @@ async function loadVectorSources() {
 async function handleTabChange(tab: string) {
   if (tab === 'models' && models.value.length === 0) await loadModels()
   else if (tab === 'knowledge') {
-    if (maintenanceItems.value.length === 0) await loadMaintenanceKnowledge()
+    if (wikiEntries.value.length === 0) { await loadWikiEntries(); await loadWikiStats() }
     if (expertRules.value.length === 0) await loadExpertRules()
   }
   else if (tab === 'causal' && !causalGraph.value) await loadCausalGraph()
@@ -151,19 +213,75 @@ async function handleTabChange(tab: string) {
 }
 
 function handleKnowledgeSubTabChange() {
-  if (knowledgeSubTab.value === 'maintenance' && maintenanceItems.value.length === 0) loadMaintenanceKnowledge()
+  if (knowledgeSubTab.value === 'tech-kb' && wikiEntries.value.length === 0) { loadWikiEntries(); loadWikiStats() }
   else if (knowledgeSubTab.value === 'rules' && expertRules.value.length === 0) loadExpertRules()
 }
 
 function statusType(status: string) { return status === 'online' ? 'success' : 'danger' }
 function vectorStatusType(status: string) { return status === 'connected' ? 'success' : 'danger' }
 
-// --- Detail view handlers ---
-function viewMaintenanceDetail(item: MaintenanceKnowledge) {
-  currentMaintenance.value = item
-  showMaintenanceDetail.value = true
+// --- Wiki actions ---
+async function viewWikiEntry(entry: WikiEntryMeta) {
+  wikiDetailLoading.value = true
+  showWikiDetail.value = true
+  try {
+    currentWikiEntry.value = await api.getWikiEntry(entry.id)
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '加载词条失败')
+  } finally {
+    wikiDetailLoading.value = false
+  }
 }
 
+async function handleWikiUpload(uploadFile: any) {
+  wikiUploading.value = true
+  try {
+    const result = await api.uploadWikiDocument(uploadFile.raw || uploadFile, true)
+    ElMessage.success(result.message || `处理完成，生成 ${result.entries_created} 条词条`)
+    showWikiUploadDialog.value = false
+    await loadWikiEntries()
+    await loadWikiStats()
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '上传处理失败')
+  } finally {
+    wikiUploading.value = false
+  }
+}
+
+function handleWikiSearch() {
+  wikiCurrentPage.value = 1
+  loadWikiEntries()
+}
+
+async function handleWikiQA() {
+  if (!wikiQAQuery.value.trim()) return
+  wikiQALoading.value = true
+  wikiQAAnswer.value = ''
+  wikiQACitations.value = []
+  try {
+    const result = await api.wikiQA(wikiQAQuery.value)
+    wikiQAAnswer.value = result.answer
+    wikiQACitations.value = result.citations || []
+  } catch (e: unknown) {
+    wikiQAAnswer.value = '问答失败: ' + (e instanceof Error ? e.message : String(e))
+  } finally {
+    wikiQALoading.value = false
+  }
+}
+
+async function deleteWikiEntryById(entryId: string) {
+  try {
+    await api.deleteWikiEntry(entryId)
+    ElMessage.success('词条已删除')
+    showWikiDetail.value = false
+    await loadWikiEntries()
+    await loadWikiStats()
+  } catch (e: unknown) {
+    ElMessage.error(e instanceof Error ? e.message : '删除失败')
+  }
+}
+
+// --- Detail view handlers ---
 function viewRuleDetail(rule: ExpertRule) {
   currentRule.value = rule
   showRuleDetail.value = true
@@ -213,33 +331,6 @@ function handleAddModel() {
   showModelDialog.value = false
   Object.assign(modelForm, { name: '', url: '', method: 'POST', input_params_text: '', output_format: '' })
   ElMessage.success('模型接口已添加，可点击"联通测试"验证')
-}
-
-function handleAddMaintenance() {
-  const newItem: MaintenanceKnowledge = {
-    id: `K${String(maintenanceItems.value.length + 1).padStart(3, '0')}`,
-    title: maintenanceForm.title + (maintenanceForm.file ? ` (附件: ${maintenanceForm.file.name})` : ''),
-    category: maintenanceForm.category,
-    type: maintenanceForm.type,
-    equipment: maintenanceForm.equipment,
-    severity: maintenanceForm.severity,
-    keywords: maintenanceForm.keywords_text.split(',').map(s => s.trim()).filter(Boolean),
-    symptoms: maintenanceForm.symptoms,
-    analysis: maintenanceForm.analysis,
-    solution: maintenanceForm.solution,
-    prevention: maintenanceForm.prevention,
-    updated: new Date().toISOString().slice(0, 10),
-    source: maintenanceForm.file ? 'upload' : 'manual',
-    content_type: maintenanceForm.file ? 'document' : 'text',
-  }
-  maintenanceItems.value.push(newItem); maintenanceTotal.value = maintenanceItems.value.length
-  showMaintenanceDialog.value = false
-  Object.assign(maintenanceForm, { title: '', category: '', type: '', equipment: '', severity: '中', keywords_text: '', symptoms: '', analysis: '', solution: '', prevention: '', file: null })
-  ElMessage.success('知识条目已添加')
-}
-
-function handleFileChange(uploadFile: any) {
-  maintenanceForm.file = uploadFile.raw || null
 }
 
 function handleAddRule() {
@@ -297,20 +388,108 @@ function openCausalNodeDialog() {
   showCausalNodeDialog.value = true
 }
 
-function sourceLabel(source?: string) {
-  const map: Record<string, string> = { manual: '手动录入', upload: '文件上传', vector: '向量检索' }
-  return map[source || 'manual'] || '手动录入'
+// --- Raw files ---
+async function loadRawFiles() {
+  rawFilesLoading.value = true
+  try {
+    const r = await api.getWikiRawFiles()
+    rawFiles.value = r.files
+  } catch (e: unknown) { ElMessage.error(e instanceof Error ? e.message : '加载失败') }
+  finally { rawFilesLoading.value = false }
 }
 
-function sourceTagType(source?: string) {
-  const map: Record<string, string> = { manual: '', upload: 'warning', vector: 'success' }
-  return map[source || 'manual'] || ''
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
-function contentTypeLabel(ct?: string) {
-  const map: Record<string, string> = { text: '文本', document: '文档', image: '图像' }
-  return map[ct || 'text'] || '文本'
+async function viewRawFile(file: RawFileInfo) {
+  if (file.type === 'md') {
+    try {
+      const r = await api.getWikiRawFile(file.name)
+      rawContentTitle.value = file.name
+      rawContentText.value = r.content
+      showRawContentDialog.value = true
+    } catch (e: unknown) { ElMessage.error(e instanceof Error ? e.message : '加载失败') }
+  } else {
+    window.open(`/api/knowledge/knowledge/wiki/raw-files/${encodeURIComponent(file.name)}`, '_blank')
+  }
 }
+
+function openRawFilesDrawer() {
+  showRawFilesDrawer.value = true
+  if (rawFiles.value.length === 0) loadRawFiles()
+}
+
+// --- Index/Log dialogs ---
+async function openIndexDialog() {
+  showIndexDialog.value = true
+  if (!indexContent.value) {
+    try { indexContent.value = await api.getWikiIndexContent() }
+    catch (e: unknown) { indexContent.value = '加载失败' }
+  }
+}
+
+async function openLogDialog() {
+  showLogDialog.value = true
+  try { logContent.value = await api.getWikiLogContent() }
+  catch (e: unknown) { logContent.value = '加载失败' }
+}
+
+// --- Wiki graph ---
+async function loadWikiGraph() {
+  wikiGraphLoading.value = true
+  try { wikiGraphData.value = await api.getWikiGraph() }
+  catch (e: unknown) { ElMessage.error(e instanceof Error ? e.message : '加载图谱失败') }
+  finally { wikiGraphLoading.value = false }
+}
+
+const wikiGraphOption = computed(() => {
+  if (!wikiGraphData.value || wikiGraphData.value.nodes.length === 0) return {}
+  const { nodes, edges } = wikiGraphData.value
+  const typeLabels: Record<string, string> = {
+    content_summary: '内容摘要', entity: '实体词条', concept: '概念词条',
+    comparative: '对比分析', overview: '总览综述',
+  }
+  const categories = [
+    { name: '内容摘要', itemStyle: { color: '#409eff' } },
+    { name: '实体词条', itemStyle: { color: '#67c23a' } },
+    { name: '概念词条', itemStyle: { color: '#e6a23c' } },
+    { name: '对比分析', itemStyle: { color: '#f56c6c' } },
+    { name: '总览综述', itemStyle: { color: '#9b59b6' } },
+  ]
+  const catIdx: Record<string, number> = { content_summary: 0, entity: 1, concept: 2, comparative: 3, overview: 4 }
+  return {
+    tooltip: { formatter: '{b}' },
+    legend: { data: categories.map(c => c.name), top: 0 },
+    animationDurationUpdate: 300,
+    series: [{
+      type: 'graph', layout: 'force',
+      data: nodes.map(n => ({
+        id: n.id, name: n.name,
+        symbolSize: 16 + Math.min(n.degree * 4, 24),
+        itemStyle: { color: n.color },
+        category: catIdx[n.type] ?? 0,
+        label: { show: true, fontSize: 8, color: '#606266' },
+      })),
+      links: edges.map(e => ({
+        source: e.source, target: e.target,
+        lineStyle: { width: Math.max(1, e.weight * 3), opacity: 0.5, curveness: 0.05 },
+      })),
+      categories, roam: true, draggable: true,
+      force: {
+        repulsion: 500,
+        gravity: 0.03,
+        edgeLength: [60, 150],
+        friction: 0.6,
+        layoutAnimation: false,
+      },
+      label: { position: 'right' },
+      emphasis: { focus: 'adjacency', lineStyle: { width: 4 } },
+    }],
+  }
+})
 
 onMounted(async () => { await loadModels() })
 </script>
@@ -369,42 +548,86 @@ onMounted(async () => { await loadModels() })
         <el-tab-pane label="知识库" name="knowledge">
           <el-tabs v-model="knowledgeSubTab" @tab-change="handleKnowledgeSubTabChange">
 
-            <!-- Sub-tab: 检维修知识 -->
-            <el-tab-pane label="检维修知识" name="maintenance">
+            <!-- Sub-tab: 技术知识库 -->
+            <el-tab-pane label="技术知识库" name="tech-kb">
               <div class="tab-header">
-                <span class="total-label">共 {{ maintenanceTotal }} 条知识</span>
+                <div class="wiki-stats-bar">
+                  <span class="total-label">共 {{ wikiTotal }} 条词条</span>
+                  <template v-if="wikiStats">
+                    <el-tag v-for="(count, t) in wikiStats.by_type" :key="t" size="small" :type="wikiTypeTag(t)" style="margin-left:6px;">
+                      {{ wikiTypeLabels[t] || t }} {{ count }}
+                    </el-tag>
+                  </template>
+                </div>
                 <div>
-                  <el-button type="primary" size="small" @click="showMaintenanceDialog = true">添加知识</el-button>
-                  <el-button size="small" @click="loadMaintenanceKnowledge">刷新</el-button>
+                  <el-button type="primary" size="small" @click="showWikiUploadDialog = true">上传文档</el-button>
+                  <el-button size="small" @click="openRawFilesDrawer">原始资料</el-button>
+                  <el-button size="small" @click="openIndexDialog">内容索引</el-button>
+                  <el-button size="small" @click="openLogDialog">操作日志</el-button>
+                  <el-button size="small" @click="showWikiQADialog = true">知识问答</el-button>
+                  <el-button size="small" @click="loadWikiEntries(); loadWikiStats()">刷新</el-button>
                 </div>
               </div>
-              <el-table v-loading="loading" :data="maintenanceItems" stripe size="small" row-class-name="clickable-row" @row-click="viewMaintenanceDetail">
+
+              <!-- 搜索和筛选 -->
+              <div class="wiki-filter-bar">
+                <el-input v-model="wikiSearch" placeholder="搜索词条..." clearable style="width:260px;" size="small" @keyup.enter="handleWikiSearch" @clear="handleWikiSearch">
+                  <template #prefix><el-icon><Search /></el-icon></template>
+                </el-input>
+                <el-select v-model="wikiFilterType" placeholder="类型" clearable size="small" style="width:130px;margin-left:8px;" @change="handleWikiSearch">
+                  <el-option v-for="(label, key) in wikiTypeLabels" :key="key" :label="label" :value="key" />
+                </el-select>
+                <el-select v-model="wikiFilterCategory" placeholder="分类" clearable size="small" style="width:120px;margin-left:8px;" @change="handleWikiSearch">
+                  <el-option label="压气机" value="压气机" />
+                  <el-option label="燃烧室" value="燃烧室" />
+                  <el-option label="透平" value="透平" />
+                  <el-option label="发电机" value="发电机" />
+                  <el-option label="余热锅炉" value="余热锅炉" />
+                  <el-option label="控制系统" value="控制系统" />
+                  <el-option label="整机" value="整机" />
+                  <el-option label="辅助系统" value="辅助系统" />
+                </el-select>
+                <el-button type="primary" size="small" style="margin-left:8px;" @click="handleWikiSearch">搜索</el-button>
+              </div>
+
+              <!-- 词条表格 -->
+              <el-table v-loading="wikiLoading" :data="wikiEntries" stripe size="small" row-class-name="clickable-row" @row-click="viewWikiEntry">
                 <el-table-column prop="id" label="ID" width="70" />
-                <el-table-column prop="title" label="标题" min-width="220" show-overflow-tooltip />
+                <el-table-column prop="title" label="标题" min-width="240" show-overflow-tooltip />
+                <el-table-column label="类型" width="100" align="center">
+                  <template #default="{ row }">
+                    <el-tag :type="wikiTypeTag(row.type)" size="small">{{ wikiTypeLabels[row.type] || row.type }}</el-tag>
+                  </template>
+                </el-table-column>
                 <el-table-column prop="category" label="分类" width="90" />
-                <el-table-column prop="type" label="类型" width="90" />
-                <el-table-column label="严重度" width="80" align="center">
+                <el-table-column label="标签" min-width="160">
                   <template #default="{ row }">
-                    <el-tag :type="severityType(row.severity)" size="small">{{ row.severity || '中' }}</el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column label="关键词" min-width="180">
-                  <template #default="{ row }">
-                    <el-tag v-for="kw in (row.keywords as string[]).slice(0, 4)" :key="kw" size="small" style="margin:0 2px 2px 0;">{{ kw }}</el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column label="来源" width="100" align="center">
-                  <template #default="{ row }">
-                    <el-tag :type="sourceTagType(row.source)" size="small">{{ sourceLabel(row.source) }}</el-tag>
+                    <el-tag v-for="t in (row.tags as string[]).slice(0, 3)" :key="t" size="small" style="margin:0 2px 2px 0;">{{ t }}</el-tag>
                   </template>
                 </el-table-column>
                 <el-table-column prop="updated" label="更新时间" width="120" />
                 <el-table-column label="操作" width="70" align="center">
                   <template #default="{ row }">
-                    <el-button type="primary" link size="small" @click.stop="viewMaintenanceDetail(row)">详情</el-button>
+                    <el-button type="primary" link size="small" @click.stop="viewWikiEntry(row)">详情</el-button>
                   </template>
                 </el-table-column>
               </el-table>
+
+              <!-- 分页 -->
+              <div style="display:flex;justify-content:flex-end;margin-top:12px;">
+                <el-pagination v-model:current-page="wikiCurrentPage" :page-size="wikiPageSize" :total="wikiTotal" layout="total, prev, pager, next" size="small" @current-change="loadWikiEntries" />
+              </div>
+            </el-tab-pane>
+
+            <!-- Sub-tab: 知识图谱 -->
+            <el-tab-pane label="知识图谱" name="wiki-graph" @tab-click="() => { if (!wikiGraphData) loadWikiGraph() }">
+              <div class="tab-header">
+                <span class="total-label">{{ wikiGraphData ? `${wikiGraphData.nodes.length} 节点, ${wikiGraphData.edges.length} 关联边` : '' }}</span>
+                <el-button size="small" @click="loadWikiGraph">刷新</el-button>
+              </div>
+              <VChart v-if="wikiGraphData && wikiGraphData.nodes.length > 0" :option="wikiGraphOption" style="height:520px;width:100%;" autoresize />
+              <el-empty v-else-if="!wikiGraphLoading" description="暂无图谱数据，请先上传文档生成 wiki 词条" />
+              <div v-else style="text-align:center;padding:80px 0;color:#909399;">加载中...</div>
             </el-tab-pane>
 
             <!-- Sub-tab: 专家规则 -->
@@ -418,20 +641,29 @@ onMounted(async () => { await loadModels() })
               </div>
               <el-table v-loading="loading" :data="expertRules" stripe size="small" row-class-name="clickable-row" @row-click="viewRuleDetail">
                 <el-table-column prop="id" label="ID" width="70" />
-                <el-table-column prop="name" label="规则名称" min-width="160" />
-                <el-table-column prop="condition" label="触发条件" min-width="220" show-overflow-tooltip />
-                <el-table-column prop="conclusion" label="诊断结论" min-width="200" show-overflow-tooltip />
-                <el-table-column label="严重度" width="80" align="center">
+                <el-table-column prop="name" label="规则名称" min-width="150" />
+                <el-table-column prop="condition" label="触发条件" min-width="200" show-overflow-tooltip />
+                <el-table-column label="因果标签" min-width="260">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.symptom_tag" size="small" color="#e6a23c" style="color:#fff;border:none;margin-right:4px;" effect="dark">{{ row.symptom_tag }}</el-tag>
+                    <el-tag v-if="row.subsystem_tag && row.subsystem_tag !== '综合'" size="small" color="#409eff" style="color:#fff;border:none;margin-right:4px;" effect="dark">{{ row.subsystem_tag }}</el-tag>
+                    <el-tag v-if="row.root_cause_tag" size="small" color="#f56c6c" style="color:#fff;border:none;margin-right:4px;" effect="dark">{{ row.root_cause_tag }}</el-tag>
+                    <el-tag v-if="row.trigger_rule_id" size="small" color="#9b59b6" style="color:#fff;border:none;" effect="dark">{{ row.trigger_rule_id }}</el-tag>
+                    <span v-if="!row.symptom_tag && !row.subsystem_tag && !row.root_cause_tag" style="color:#c0c4cc;font-size:12px;">综合诊断规则</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="conclusion" label="诊断结论" min-width="180" show-overflow-tooltip />
+                <el-table-column label="严重度" width="70" align="center">
                   <template #default="{ row }">
                     <el-tag :type="severityType(row.severity)" size="small">{{ row.severity || '中' }}</el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column label="置信度" width="80" align="center">
+                <el-table-column label="置信度" width="70" align="center">
                   <template #default="{ row }">
                     <span :style="{ color: row.confidence >= 0.85 ? '#67c23a' : '#e6a23c', fontWeight: 600 }">{{ (row.confidence * 100).toFixed(0) }}%</span>
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="70" align="center">
+                <el-table-column label="操作" width="60" align="center">
                   <template #default="{ row }">
                     <el-button type="primary" link size="small" @click.stop="viewRuleDetail(row)">详情</el-button>
                   </template>
@@ -491,50 +723,96 @@ onMounted(async () => { await loadModels() })
     </el-card>
 
     <!-- ============================================ -->
-    <!-- Detail Drawer: Maintenance Knowledge -->
+    <!-- Wiki Detail Drawer -->
     <!-- ============================================ -->
-    <el-drawer v-model="showMaintenanceDetail" :title="currentMaintenance?.title || '知识详情'" size="55%" direction="rtl">
-      <template v-if="currentMaintenance">
-        <div class="detail-header">
-          <el-tag :type="severityType(currentMaintenance.severity)" size="default">{{ currentMaintenance.severity || '中' }}风险</el-tag>
-          <el-tag type="info" size="small" style="margin-left:8px;">{{ currentMaintenance.category }}</el-tag>
-          <el-tag size="small" style="margin-left:8px;">{{ currentMaintenance.type }}</el-tag>
-          <span class="detail-meta">{{ currentMaintenance.updated }} | {{ sourceLabel(currentMaintenance.source) }}</span>
+    <el-drawer v-model="showWikiDetail" :title="currentWikiEntry?.title || '词条详情'" size="55%" direction="rtl">
+      <div v-loading="wikiDetailLoading">
+        <template v-if="currentWikiEntry">
+          <div class="detail-header">
+            <el-tag :type="wikiTypeTag(currentWikiEntry.type)" size="default">{{ wikiTypeLabels[currentWikiEntry.type] || currentWikiEntry.type }}</el-tag>
+            <el-tag type="info" size="small" style="margin-left:8px;">{{ currentWikiEntry.category }}</el-tag>
+            <el-tag v-if="currentWikiEntry.severity" :type="severityType(currentWikiEntry.severity)" size="small" style="margin-left:8px;">{{ currentWikiEntry.severity }}</el-tag>
+            <span class="detail-meta">{{ currentWikiEntry.updated }} | {{ currentWikiEntry.source_file }}</span>
+          </div>
+
+          <div v-if="currentWikiEntry.tags?.length" class="detail-section">
+            <div class="section-title">标签</div>
+            <div class="section-content">
+              <el-tag v-for="t in currentWikiEntry.tags" :key="t" size="small" style="margin:0 4px 4px 0;">{{ t }}</el-tag>
+            </div>
+          </div>
+
+          <div v-if="currentWikiEntry.equipment" class="detail-section">
+            <div class="section-title">关联设备</div>
+            <div class="section-content">{{ currentWikiEntry.equipment }}</div>
+          </div>
+
+          <div class="detail-section">
+            <div class="section-title">词条内容</div>
+            <div class="section-content wiki-content pre-text">{{ currentWikiEntry.content }}</div>
+          </div>
+
+          <div v-if="currentWikiEntry.related_entries?.length" class="detail-section">
+            <div class="section-title">关联词条</div>
+            <div class="section-content">
+              <el-tag v-for="eid in currentWikiEntry.related_entries" :key="eid" size="small" type="info" style="margin:0 4px 4px 0;cursor:pointer;" @click="viewWikiEntry({ id: eid } as any)">{{ eid }}</el-tag>
+            </div>
+          </div>
+
+          <div style="margin-top:24px;">
+            <el-popconfirm title="确定删除此词条？" @confirm="deleteWikiEntryById(currentWikiEntry!.id)">
+              <template #reference><el-button type="danger" size="small">删除词条</el-button></template>
+            </el-popconfirm>
+          </div>
+        </template>
+      </div>
+    </el-drawer>
+
+    <!-- ============================================ -->
+    <!-- Wiki Upload Dialog -->
+    <!-- ============================================ -->
+    <el-dialog v-model="showWikiUploadDialog" title="上传文档到技术知识库" width="560px">
+      <div v-if="!wikiUploading">
+        <el-upload drag :auto-upload="false" :limit="1" :on-change="(f: any) => handleWikiUpload(f)" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.md,.txt">
+          <el-icon style="font-size:48px;color:#c0c4cc;"><UploadFilled /></el-icon>
+          <div style="margin-top:8px;">拖拽文件到此处，或 <em>点击上传</em></div>
+          <template #tip>
+            <div class="upload-tip">支持 PDF、Word、PowerPoint、Excel、Markdown 文件。上传后 LLM 将自动解析并生成 wiki 词条。</div>
+          </template>
+        </el-upload>
+      </div>
+      <div v-else class="upload-progress">
+        <el-icon class="is-loading" style="font-size:32px;color:#409eff;"><Loading /></el-icon>
+        <div style="margin-top:12px;font-size:14px;color:#606266;">LLM 正在处理文档并生成 wiki 词条...</div>
+        <div style="font-size:12px;color:#909399;margin-top:4px;">这可能需要 1-3 分钟，请耐心等待</div>
+      </div>
+    </el-dialog>
+
+    <!-- ============================================ -->
+    <!-- Wiki QA Dialog -->
+    <!-- ============================================ -->
+    <el-dialog v-model="showWikiQADialog" title="技术知识库问答" width="700px" top="5vh">
+      <div class="qa-container">
+        <div class="qa-input-bar">
+          <el-input v-model="wikiQAQuery" placeholder="输入您的问题，如：压气机叶片积垢怎么处理？" @keyup.enter="handleWikiQA" />
+          <el-button type="primary" :loading="wikiQALoading" @click="handleWikiQA" style="margin-left:8px;">提问</el-button>
         </div>
 
-        <div v-if="currentMaintenance.equipment" class="detail-section">
-          <div class="section-title">适用设备</div>
-          <div class="section-content">{{ currentMaintenance.equipment }}</div>
+        <div v-if="wikiQAAnswer" class="qa-answer">
+          <div class="section-title">回答</div>
+          <div class="section-content pre-text">{{ wikiQAAnswer }}</div>
         </div>
 
-        <div v-if="currentMaintenance.keywords?.length" class="detail-section">
-          <div class="section-title">关键词</div>
-          <div class="section-content">
-            <el-tag v-for="kw in currentMaintenance.keywords" :key="kw" size="small" style="margin:0 4px 4px 0;">{{ kw }}</el-tag>
+        <div v-if="wikiQACitations.length" class="qa-citations">
+          <div class="section-title">来源引用</div>
+          <div v-for="c in wikiQACitations" :key="c.entry_id" class="citation-item">
+            <el-tag :type="wikiTypeTag(c.type)" size="small">{{ wikiTypeLabels[c.type] || c.type }}</el-tag>
+            <span class="citation-title" @click="viewWikiEntry({ id: c.entry_id } as any)">{{ c.entry_id }}: {{ c.title }}</span>
+            <span class="citation-score">相关度: {{ c.relevance_score }}</span>
           </div>
         </div>
-
-        <div v-if="currentMaintenance.symptoms" class="detail-section">
-          <div class="section-title">故障现象</div>
-          <div class="section-content pre-text">{{ currentMaintenance.symptoms }}</div>
-        </div>
-
-        <div v-if="currentMaintenance.analysis" class="detail-section">
-          <div class="section-title">原因分析</div>
-          <div class="section-content pre-text">{{ currentMaintenance.analysis }}</div>
-        </div>
-
-        <div v-if="currentMaintenance.solution" class="detail-section">
-          <div class="section-title">处理方案</div>
-          <div class="section-content pre-text">{{ currentMaintenance.solution }}</div>
-        </div>
-
-        <div v-if="currentMaintenance.prevention" class="detail-section">
-          <div class="section-title">预防措施</div>
-          <div class="section-content pre-text">{{ currentMaintenance.prevention }}</div>
-        </div>
-      </template>
-    </el-drawer>
+      </div>
+    </el-dialog>
 
     <!-- ============================================ -->
     <!-- Detail Drawer: Expert Rule -->
@@ -586,79 +864,7 @@ onMounted(async () => { await loadModels() })
       <template #footer><el-button @click="showModelDialog = false">取消</el-button><el-button type="primary" @click="handleAddModel">确定</el-button></template>
     </el-dialog>
 
-    <!-- Add Maintenance Knowledge Dialog — full form -->
-    <el-dialog v-model="showMaintenanceDialog" title="添加检维修知识" width="680px" top="5vh">
-      <el-form :model="maintenanceForm" label-width="90px" class="add-form">
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="标题" required><el-input v-model="maintenanceForm.title" placeholder="如 压气机叶片积垢清洗规程" /></el-form-item>
-          </el-col>
-          <el-col :span="6">
-            <el-form-item label="分类" required>
-              <el-select v-model="maintenanceForm.category" placeholder="选择分类">
-                <el-option label="压气机" value="压气机" />
-                <el-option label="燃烧室" value="燃烧室" />
-                <el-option label="透平" value="透平" />
-                <el-option label="发电机" value="发电机" />
-                <el-option label="余热锅炉" value="余热锅炉" />
-                <el-option label="控制系统" value="控制系统" />
-                <el-option label="整机" value="整机" />
-                <el-option label="辅助系统" value="辅助系统" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="6">
-            <el-form-item label="类型" required>
-              <el-select v-model="maintenanceForm.type" placeholder="选择类型">
-                <el-option label="检修规程" value="检修规程" />
-                <el-option label="故障诊断" value="故障诊断" />
-                <el-option label="处理案例" value="处理案例" />
-                <el-option label="检测标准" value="检测标准" />
-                <el-option label="预防指南" value="预防指南" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="适用设备"><el-input v-model="maintenanceForm.equipment" placeholder="如 压气机叶片（静叶/动叶）" /></el-form-item>
-          </el-col>
-          <el-col :span="6">
-            <el-form-item label="严重度">
-              <el-select v-model="maintenanceForm.severity">
-                <el-option label="高" value="高" />
-                <el-option label="中" value="中" />
-                <el-option label="低" value="低" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="6">
-            <el-form-item label="关键词"><el-input v-model="maintenanceForm.keywords_text" placeholder="逗号分隔" /></el-form-item>
-          </el-col>
-        </el-row>
-        <el-form-item label="故障现象">
-          <el-input v-model="maintenanceForm.symptoms" type="textarea" :rows="3" placeholder="描述故障的主要表现和可观测到的异常指标" />
-        </el-form-item>
-        <el-form-item label="原因分析">
-          <el-input v-model="maintenanceForm.analysis" type="textarea" :rows="4" placeholder="分析可能的故障原因及其物理机制" />
-        </el-form-item>
-        <el-form-item label="处理方案">
-          <el-input v-model="maintenanceForm.solution" type="textarea" :rows="4" placeholder="按步骤描述处理/检修方案" />
-        </el-form-item>
-        <el-form-item label="预防措施">
-          <el-input v-model="maintenanceForm.prevention" type="textarea" :rows="3" placeholder="描述预防同类故障再次发生的措施" />
-        </el-form-item>
-        <el-form-item label="附件">
-          <el-upload :auto-upload="false" :limit="1" :on-change="handleFileChange" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.txt">
-            <template #trigger><el-button size="small">选择文件</el-button></template>
-            <template #tip><div class="upload-tip">支持 PDF、Word、图片、文本文件</div></template>
-          </el-upload>
-        </el-form-item>
-      </el-form>
-      <template #footer><el-button @click="showMaintenanceDialog = false">取消</el-button><el-button type="primary" @click="handleAddMaintenance">确定</el-button></template>
-    </el-dialog>
-
-    <!-- Add Expert Rule Dialog — full form -->
+    <!-- Add Expert Rule Dialog -->
     <el-dialog v-model="showRuleDialog" title="添加专家规则" width="620px" top="5vh">
       <el-form :model="ruleForm" label-width="100px" class="add-form">
         <el-form-item label="规则名称" required><el-input v-model="ruleForm.name" placeholder="如 排气温度超限预警规则" /></el-form-item>
@@ -718,6 +924,7 @@ onMounted(async () => { await loadModels() })
             <el-option label="征兆 (symptom)" value="symptom" />
             <el-option label="子系统 (subsystem)" value="subsystem" />
             <el-option label="根因 (root_cause)" value="root_cause" />
+            <el-option label="触发规则 (trigger_rule)" value="trigger_rule" />
           </el-select>
         </el-form-item>
         <el-form-item label="关联节点">
@@ -747,6 +954,48 @@ onMounted(async () => { await loadModels() })
       </el-form>
       <template #footer><el-button @click="showCausalEdgeDialog = false">取消</el-button><el-button type="primary" @click="handleAddCausalEdge">确定</el-button></template>
     </el-dialog>
+
+    <!-- ============================================ -->
+    <!-- Raw Files Drawer -->
+    <!-- ============================================ -->
+    <el-drawer v-model="showRawFilesDrawer" title="原始资料文件" size="55%" direction="rtl">
+      <div style="margin-bottom:12px;">
+        <el-button size="small" @click="loadRawFiles">刷新</el-button>
+      </div>
+      <el-table v-loading="rawFilesLoading" :data="rawFiles" stripe size="small">
+        <el-table-column prop="name" label="文件名" min-width="260" show-overflow-tooltip />
+        <el-table-column label="大小" width="100" align="right">
+          <template #default="{ row }">{{ formatFileSize(row.size) }}</template>
+        </el-table-column>
+        <el-table-column prop="type" label="类型" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" type="info">{{ row.type }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="modified" label="修改时间" width="140" />
+        <el-table-column label="操作" width="80" align="center">
+          <template #default="{ row }">
+            <el-button type="primary" link size="small" @click="viewRawFile(row)">{{ row.type === 'md' ? '查看' : '下载' }}</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="rawFiles.length === 0 && !rawFilesLoading" description="暂无原始资料文件" />
+    </el-drawer>
+
+    <!-- Raw Content Dialog (md 查看器) -->
+    <el-dialog v-model="showRawContentDialog" :title="rawContentTitle" width="700px" top="5vh">
+      <div class="pre-text raw-content-view">{{ rawContentText }}</div>
+    </el-dialog>
+
+    <!-- Wiki Index Dialog -->
+    <el-dialog v-model="showIndexDialog" title="内容索引 (index.md)" width="700px" top="5vh">
+      <div class="pre-text raw-content-view">{{ indexContent }}</div>
+    </el-dialog>
+
+    <!-- Wiki Log Dialog -->
+    <el-dialog v-model="showLogDialog" title="操作日志 (log.md)" width="700px" top="5vh">
+      <div class="pre-text raw-content-view">{{ logContent }}</div>
+    </el-dialog>
   </div>
 </template>
 
@@ -763,6 +1012,26 @@ onMounted(async () => { await loadModels() })
 :deep(.clickable-row) { cursor: pointer; }
 :deep(.clickable-row:hover) { background-color: #ecf5ff !important; }
 
+.wiki-stats-bar { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.wiki-filter-bar { display: flex; align-items: center; margin-bottom: 12px; }
+
+.upload-progress {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 48px 0;
+}
+
+.qa-container { min-height: 200px; }
+.qa-input-bar { display: flex; margin-bottom: 20px; }
+.qa-answer { margin-bottom: 20px; }
+.qa-citations { border-top: 1px solid #ebeef5; padding-top: 12px; }
+.citation-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 0; font-size: 13px;
+}
+.citation-title { color: #409eff; cursor: pointer; }
+.citation-title:hover { text-decoration: underline; }
+.citation-score { color: #909399; font-size: 12px; margin-left: auto; }
+
 /* Detail drawer styles */
 .detail-header {
   display: flex;
@@ -777,9 +1046,7 @@ onMounted(async () => { await loadModels() })
   margin-left: auto;
 }
 
-.detail-section {
-  margin-bottom: 18px;
-}
+.detail-section { margin-bottom: 18px; }
 .section-title {
   font-size: 13px;
   font-weight: 600;
@@ -794,14 +1061,8 @@ onMounted(async () => { await loadModels() })
   line-height: 1.8;
   padding-left: 11px;
 }
-.pre-text {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.highlight-box {
-  background: #f5f7fa;
-  border-radius: 4px;
-  padding: 10px 12px;
-  font-weight: 500;
-}
+.pre-text { white-space: pre-wrap; word-break: break-word; }
+.highlight-box { background: #f5f7fa; border-radius: 4px; padding: 10px 12px; font-weight: 500; }
+.wiki-content { max-height: 60vh; overflow-y: auto; }
+.raw-content-view { max-height: 65vh; overflow-y: auto; font-size: 13px; line-height: 1.8; color: #303133; }
 </style>

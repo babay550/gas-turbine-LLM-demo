@@ -17,6 +17,8 @@ _TOOL_LABELS = {
     "benchmark_analysis": "对标分析模型",
     "efficiency_trend": "能效趋势数据",
     "warning_query": "预警查询",
+    "wiki_search": "技术知识库",
+    "root_cause_analysis": "根因推理诊断",
 }
 
 
@@ -98,6 +100,20 @@ def _extract_summary(tool_name: str, result) -> str:
         high = levels.count("高")
         medium = levels.count("中")
         return f"活跃预警 {total} 条（高 {high}，中 {medium}）"
+
+    if tool_name == "wiki_search":
+        total = data.get("total", 0)
+        items = data.get("items", [])
+        titles = ", ".join(i.get("title", "") for i in items[:5])
+        return f"检索到 {total} 条知识词条: {titles}"
+
+    if tool_name == "root_cause_analysis":
+        status = data.get("status", "")
+        rules = data.get("triggered_rules", [])
+        if status == "triggered" and rules:
+            names = ", ".join(r.get("rule_name", "") for r in rules[:3])
+            return f"触发 {len(rules)} 条专家规则: {names}"
+        return "未触发专家规则，已检索知识库"
 
     return str(data)[:100]
 

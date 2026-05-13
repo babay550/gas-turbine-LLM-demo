@@ -331,6 +331,97 @@ export interface MaintenanceListResponse {
 
 // ---- Knowledge: Vector KB Sources ----
 
+// ---- Knowledge: Wiki 技术知识库 ----
+
+export type WikiEntryType = 'content_summary' | 'entity' | 'concept' | 'comparative' | 'overview'
+
+export interface WikiEntryMeta {
+  id: string
+  title: string
+  type: WikiEntryType
+  category: string
+  tags: string[]
+  equipment?: string
+  severity?: string
+  source_file?: string
+  concept_subcategory?: string
+  related_entries?: string[]
+  created: string
+  updated: string
+}
+
+export interface WikiEntry extends WikiEntryMeta {
+  content: string
+}
+
+export interface WikiEntryListResponse {
+  entries: WikiEntryMeta[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface WikiStatsResponse {
+  total_entries: number
+  by_type: Record<string, number>
+  by_category: Record<string, number>
+  recent_updates: WikiEntryMeta[]
+}
+
+export interface WikiUploadResult {
+  success: boolean
+  source_file: string
+  entries_created: number
+  entry_ids: string[]
+  processing_time_ms: number
+  message: string
+}
+
+export interface WikiQAResponse {
+  answer: string
+  citations: WikiCitation[]
+  processing_time_ms?: number
+}
+
+export interface WikiCitation {
+  entry_id: string
+  title: string
+  type: WikiEntryType
+  category: string
+  relevance_score?: number
+  snippet: string
+}
+
+export interface RawFileInfo {
+  name: string
+  size: number
+  modified: string
+  type: string
+}
+
+export interface WikiGraphNode {
+  id: string
+  name: string
+  type: WikiEntryType
+  category: string
+  color: string
+  label: string
+  degree: number
+}
+
+export interface WikiGraphEdge {
+  source: string
+  target: string
+  weight: number
+}
+
+export interface WikiGraphData {
+  nodes: WikiGraphNode[]
+  edges: WikiGraphEdge[]
+}
+
+// ---- Knowledge: Vector KB Sources ----
+
 export interface VectorKBSource {
   id: string
   name: string
@@ -367,6 +458,10 @@ export interface ExpertRule {
   severity?: string
   related_params?: string[]
   recommended_actions?: string
+  symptom_tag?: string
+  subsystem_tag?: string
+  root_cause_tag?: string
+  trigger_rule_id?: string
 }
 
 export interface ExpertRuleListResponse {
@@ -379,7 +474,7 @@ export interface ExpertRuleListResponse {
 export interface CausalNode {
   id: string
   name: string
-  type: 'symptom' | 'subsystem' | 'root_cause'
+  type: 'symptom' | 'subsystem' | 'root_cause' | 'trigger_rule'
 }
 
 export interface CausalEdge {
@@ -391,6 +486,117 @@ export interface CausalEdge {
 export interface CausalGraph {
   nodes: CausalNode[]
   edges: CausalEdge[]
+}
+
+// ---- Workflow ----
+
+export interface WorkflowNode {
+  id: string
+  type: string
+  label: string
+  position: { x: number; y: number }
+  config: Record<string, unknown>
+}
+
+export interface WorkflowEdge {
+  id: string
+  source: string
+  target: string
+  sourceHandle?: string
+}
+
+export interface WorkflowDefinition {
+  id: string
+  name: string
+  description: string
+  nodes: WorkflowNode[]
+  edges: WorkflowEdge[]
+  updated_at?: string
+}
+
+export interface NodeConfigField {
+  key: string
+  label: string
+  type: 'text' | 'textarea' | 'select' | 'multiselect' | 'number'
+  default?: unknown
+  options?: string[]
+}
+
+export interface NodeTypeDef {
+  type: string
+  label: string
+  category: string
+  icon: string
+  color: string
+  description: string
+  config_fields: NodeConfigField[]
+}
+
+export interface ExecutionLogEntry {
+  node: string
+  type: string
+  label: string
+  status: 'ok' | 'error' | 'skipped'
+  elapsed_ms: number
+  detail?: string
+}
+
+export interface ExecutionResult {
+  status: string
+  total_ms: number
+  logs: ExecutionLogEntry[]
+  final_output: unknown
+  state_keys: string[]
+}
+
+// ---- Root Cause Analysis ----
+
+export interface AnomalyItem {
+  param: string
+  value: number
+  threshold: number
+  direction: string
+}
+
+export interface TriggeredRule {
+  rule_id: string
+  rule_name: string
+  confidence: number
+  conclusion: string
+  severity: string
+  symptom_tag: string
+  subsystem_tag: string
+  root_cause_tag: string
+  trigger_rule_id: string
+  matched_params: Record<string, { value: number; threshold: number; op: string }>
+  recommended_actions: string
+}
+
+export interface DiagnosisChain {
+  chain: string[]
+  confidence: number
+  severity: string
+  rule_id: string
+  rule_name: string
+  conclusion: string
+  recommended_actions: string
+}
+
+export interface WikiRef {
+  id: string
+  title: string
+  snippet: string
+  relevance_score?: number
+}
+
+export interface RootCauseAnalysisResult {
+  status: 'triggered' | 'no_rule_matched'
+  anomalies: AnomalyItem[]
+  triggered_rules: TriggeredRule[]
+  diagnosis_chains: DiagnosisChain[]
+  wiki_references: WikiRef[]
+  suggestions: string[]
+  elapsed_ms: number
 }
 
 // ---- Generic API Response ----

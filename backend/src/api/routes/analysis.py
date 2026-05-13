@@ -30,11 +30,15 @@ async def run_benchmark_analysis(request: Request):
 
 @router.post("/root-cause")
 async def run_root_cause_analysis(request: Request):
-    """执行根因推理分析（调用 Agent 通过 LLM 进行推理）。"""
-    # MVP: 直接调用 Agent 的工具，后续接入 LLM 推理链
-    scheduler = request.app.state.scheduler
-    result = scheduler.trigger_direct("optimization_agent", "efficiency_analysis")
-    return result
+    """执行根因推理分析 — 异常检测 → 专家规则匹配 → 知识库检索 → 诊断建议。"""
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    query = body.get("query", "")
+    from src.tools.root_cause_tool import run_root_cause_analysis
+    return run_root_cause_analysis(query)
 
 
 @router.post("/decomposition")

@@ -6,115 +6,114 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { GraphChart, TreeChart } from 'echarts/charts'
 import { TitleComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import * as api from '../api'
-import type { CausalGraph, CausalNode } from '../types'
+import type { CausalGraph, CausalNode, RootCauseAnalysisResult, DiagnosisChain, TriggeredRule } from '../types'
 import { ElMessage } from 'element-plus'
 
 use([CanvasRenderer, GraphChart, TreeChart, TitleComponent, TooltipComponent, LegendComponent])
 
 const loading = ref(false)
 const causalGraph = ref<CausalGraph | null>(null)
-const diagnosisResult = ref<string>('')
-const diagnosisError = ref<string>('')
+const analysisResult = ref<RootCauseAnalysisResult | null>(null)
+const diagnosisError = ref('')
 
-interface CandidateRootCause { name: string; confidence: number; evidence: string[]; path: string[] }
-const candidates = ref<CandidateRootCause[]>([])
+// ---- 4-level causal graph ----
 
 const graphOption = computed(() => {
   if (!causalGraph.value) return {}
   const { nodes, edges } = causalGraph.value
-  const colorMap: Record<string, string> = { symptom: '#e6a23c', subsystem: '#409eff', root_cause: '#f56c6c' }
-  const categories = [{ name: '征兆' }, { name: '子系统' }, { name: '根因' }]
+  const colorMap: Record<string, string> = {
+    symptom: '#e6a23c',
+    subsystem: '#409eff',
+    root_cause: '#f56c6c',
+    trigger_rule: '#9b59b6',
+  }
+  const categories = [
+    { name: '征兆' },
+    { name: '子系统' },
+    { name: '根因' },
+    { name: '触发规则' },
+  ]
+  const catIdx = (t: string) => t === 'symptom' ? 0 : t === 'subsystem' ? 1 : t === 'root_cause' ? 2 : 3
+  const symSize = (t: string) => t === 'trigger_rule' ? 28 : t === 'root_cause' ? 42 : t === 'subsystem' ? 36 : 30
+
   return {
-    tooltip: {},
+    tooltip: {
+      formatter(params: any) {
+        if (params.dataType === 'node') {
+          return `<b>${params.name}</b><br/>类型: ${categories[catIdx(params.data?.category ?? 0)].name}`
+        }
+        return ''
+      },
+    },
     legend: { data: categories.map(c => c.name), top: 0 },
     series: [{
-      type: 'graph', layout: 'force',
+      type: 'graph',
+      layout: 'force',
       data: nodes.map((n: CausalNode) => ({
-        id: n.id, name: n.name,
-        symbolSize: n.type === 'root_cause' ? 50 : n.type === 'subsystem' ? 40 : 30,
+        id: n.id,
+        name: n.name,
+        symbolSize: symSize(n.type),
         itemStyle: { color: colorMap[n.type] ?? '#909399' },
-        category: n.type === 'symptom' ? 0 : n.type === 'subsystem' ? 1 : 2,
-        label: { show: true, fontSize: 11 },
+        category: catIdx(n.type),
+        label: {
+          show: true,
+          fontSize: n.type === 'trigger_rule' ? 9 : 11,
+          position: n.type === 'trigger_rule' ? 'bottom' : 'inside',
+        },
       })),
-      links: edges.map(e => ({ source: e.source, target: e.target, lineStyle: { width: Math.max(1, e.weight * 3), opacity: 0.7, curveness: 0.2 } })),
-      categories, roam: true, draggable: true,
-      force: { repulsion: 300, gravity: 0.1, edgeLength: [100, 200] },
-      label: { position: 'bottom' },
+      links: edges.map(e => ({
+        source: e.source,
+        target: e.target,
+        lineStyle: {
+          width: Math.max(1, e.weight * 3),
+          opacity: 0.6,
+          curveness: 0.15,
+          type: e.weight < 0.5 ? 'dashed' : 'solid',
+        },
+      })),
+      categories,
+      roam: true,
+      draggable: true,
+      force: { repulsion: 400, gravity: 0.06, edgeLength: [80, 180], friction: 0.6 },
       emphasis: { focus: 'adjacency', lineStyle: { width: 4 } },
     }],
   }
 })
 
-// Build evidence chain as tree data for el-tree
-interface EvidenceTreeNode { id: string; label: string; confidence?: number; children?: EvidenceTreeNode[] }
-const evidenceTreeData = computed<EvidenceTreeNode[]>(() => {
-  if (!causalGraph.value || candidates.value.length === 0) return []
+// ---- Evidence tree (4-level: symptom → subsystem → root_cause → trigger_rule) ----
+
+const evidenceTreeOption = computed(() => {
   const graph = causalGraph.value
+  if (!graph || !analysisResult.value) return {}
 
-  // Build the tree: symptom -> subsystem -> root_cause
-  const symptomNodes = graph.nodes.filter(n => n.type === 'symptom')
-  const subsystemNodes = graph.nodes.filter(n => n.type === 'subsystem')
-  const rootCauseNodes = graph.nodes.filter(n => n.type === 'root_cause')
-
-  return symptomNodes.map(symptom => {
-    // Find subsystems connected to this symptom
-    const connectedSubsystems = graph.edges
-      .filter(e => e.source === symptom.id)
-      .map(e => graph.nodes.find(n => n.id === e.target))
-      .filter(n => n && n.type === 'subsystem')
-
-    const children = connectedSubsystems.map(sub => {
-      // Find root causes connected to this subsystem
-      const connectedRoots = graph.edges
-        .filter(e => e.source === sub!.id)
-        .map(e => {
-          const rn = graph.nodes.find(n => n.id === e.target)
-          const weight = graph.edges.find(ed => ed.source === sub!.id && ed.target === e.target)?.weight ?? 0
-          return rn ? { ...rn, weight } : null
-        })
-        .filter(Boolean)
-
-      const rootChildren = connectedRoots.map(root => {
-        const candidate = candidates.value.find(c => c.name === root!.name)
-        return {
-          id: root!.id,
-          label: `${root!.name} (权重: ${(root!.weight * 100).toFixed(0)}%)` + (candidate ? ` 置信度: ${(candidate.confidence * 100).toFixed(1)}%` : ''),
-          confidence: candidate?.confidence,
-        }
-      })
-
-      return {
-        id: sub!.id,
-        label: sub!.name,
-        children: rootChildren.length > 0 ? rootChildren : undefined,
-      }
-    })
-
-    return {
-      id: symptom.id,
-      label: symptom.name,
-      children,
-    }
-  })
-})
-
-// ECharts tree option for evidence chain visualization
-const evidenceTreeChartOption = computed(() => {
-  if (evidenceTreeData.value.length === 0) return {}
-  function buildEChartsTree(nodes: EvidenceTreeNode[]): any[] {
-    return nodes.map(n => ({
-      name: n.label,
-      children: n.children ? buildEChartsTree(n.children) : undefined,
-      itemStyle: n.confidence ? { color: n.confidence >= 0.8 ? '#f56c6c' : n.confidence >= 0.6 ? '#e6a23c' : '#409eff' } : undefined,
-      symbolSize: n.children ? 14 : 10,
-    }))
+  const chains = analysisResult.value.diagnosis_chains
+  if (chains.length === 0) {
+    // No triggered rules — show the full graph structure without highlights
+    return buildFullTreeOption(graph)
   }
+
+  // Build highlighted tree from triggered diagnosis chains
+  function buildChainTree(chain: DiagnosisChain) {
+    const levels = chain.chain // [symptom, subsystem, root_cause, trigger_rule]
+    let node: any = {
+      name: levels[levels.length - 1] + ` (${(chain.confidence * 100).toFixed(0)}%)`,
+      itemStyle: { color: chain.confidence >= 0.85 ? '#f56c6c' : chain.confidence >= 0.75 ? '#e6a23c' : '#409eff' },
+      symbolSize: 10,
+    }
+    for (let i = levels.length - 2; i >= 0; i--) {
+      node = { name: levels[i], children: [node], symbolSize: i === 0 ? 14 : 12 }
+    }
+    return node
+  }
+
+  const data = chains.map(c => buildChainTree(c))
+
   return {
     tooltip: { trigger: 'item', triggerOn: 'mousemove' },
     series: [{
       type: 'tree',
-      data: buildEChartsTree(evidenceTreeData.value),
-      left: '10%', right: '20%', top: '10%', bottom: '10%',
+      data,
+      left: '8%', right: '25%', top: '8%', bottom: '8%',
       symbol: 'circle',
       orient: 'LR',
       label: { position: 'left', verticalAlign: 'middle', align: 'right', fontSize: 12 },
@@ -127,48 +126,79 @@ const evidenceTreeChartOption = computed(() => {
   }
 })
 
-function buildCandidates(graph: CausalGraph) {
-  const rootNodes = graph.nodes.filter(n => n.type === 'root_cause')
-  candidates.value = rootNodes.map(node => {
-    const relatedEdges = graph.edges.filter(e => e.target === node.id || e.source === node.id)
-    const connectedNodes = relatedEdges.map(e => {
-      const found = graph.nodes.find(n => n.id === (e.source === node.id ? e.target : e.source))
-      return found?.name ?? ''
-    })
-    // Build path from symptom to root cause
-    const path: string[] = [node.name]
-    let currentId = node.id
-    for (let i = 0; i < 3; i++) {
-      const incoming = graph.edges.find(e => e.target === currentId)
-      if (!incoming) break
-      const parent = graph.nodes.find(n => n.id === incoming.source)
-      if (parent) { path.unshift(parent.name); currentId = parent.id }
-    }
-    return { name: node.name, confidence: Math.min(0.99, 0.6 + Math.random() * 0.35), evidence: connectedNodes.slice(0, 3), path }
-  }).sort((a, b) => b.confidence - a.confidence)
+function buildFullTreeOption(graph: CausalGraph) {
+  // Show full 4-level tree when no rules triggered
+  const symptomNodes = graph.nodes.filter(n => n.type === 'symptom')
+
+  function getChildren(parentId: string): any[] {
+    return graph.edges
+      .filter(e => e.source === parentId)
+      .map(e => {
+        const child = graph.nodes.find(n => n.id === e.target)
+        if (!child) return null
+        const colorMap: Record<string, string> = { symptom: '#e6a23c', subsystem: '#409eff', root_cause: '#f56c6c', trigger_rule: '#9b59b6' }
+        return {
+          name: child.name,
+          itemStyle: { color: colorMap[child.type] || '#909399' },
+          symbolSize: child.type === 'trigger_rule' ? 6 : child.type === 'root_cause' ? 10 : 8,
+          children: getChildren(child.id),
+        }
+      })
+      .filter(Boolean)
+  }
+
+  const data = symptomNodes.map(s => ({
+    name: s.name,
+    symbolSize: 14,
+    children: getChildren(s.id),
+  }))
+
+  return {
+    tooltip: { trigger: 'item', triggerOn: 'mousemove' },
+    series: [{
+      type: 'tree',
+      data,
+      left: '8%', right: '25%', top: '8%', bottom: '8%',
+      symbol: 'circle',
+      orient: 'LR',
+      label: { position: 'left', verticalAlign: 'middle', align: 'right', fontSize: 12 },
+      leaves: { label: { position: 'right', align: 'left' } },
+      lineStyle: { width: 1.5, curveness: 0.5 },
+      expandAndCollapse: true,
+      initialTreeDepth: 3,
+      animationDuration: 550,
+    }],
+  }
 }
+
+// ---- Run diagnosis ----
 
 async function handleRunDiagnosis() {
   loading.value = true
-  diagnosisResult.value = ''
   diagnosisError.value = ''
+  analysisResult.value = null
   try {
-    const [graphRes, causeRes] = await Promise.all([api.getCausalGraph(), api.runRootCause()])
+    const [graphRes, diagRes] = await Promise.all([api.getCausalGraph(), api.runRootCause()])
     causalGraph.value = graphRes
-    buildCandidates(graphRes)
-    if (causeRes.error) { diagnosisError.value = causeRes.error; ElMessage.error(causeRes.error) }
-    else { diagnosisResult.value = causeRes.result; ElMessage.success('根因推理完成') }
+    analysisResult.value = diagRes
+    ElMessage.success(diagRes.status === 'triggered' ? `根因推理完成，触发 ${diagRes.triggered_rules.length} 条专家规则` : '根因推理完成，未触发专家规则')
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
     diagnosisError.value = msg
     ElMessage.error(msg)
-  } finally { loading.value = false }
+  } finally {
+    loading.value = false
+  }
 }
 
 function confidenceColor(conf: number) {
-  if (conf >= 0.8) return '#f56c6c'
-  if (conf >= 0.6) return '#e6a23c'
+  if (conf >= 0.85) return '#f56c6c'
+  if (conf >= 0.75) return '#e6a23c'
   return '#409eff'
+}
+
+function severityTagType(sev: string) {
+  return sev === '高' ? 'danger' : sev === '中' ? 'warning' : 'info'
 }
 
 onMounted(() => { handleRunDiagnosis() })
@@ -179,20 +209,26 @@ onMounted(() => { handleRunDiagnosis() })
     <!-- Top: Trigger -->
     <div class="page-header">
       <el-button type="primary" :loading="loading" @click="handleRunDiagnosis">执行根因推理</el-button>
+      <el-tag v-if="analysisResult" :type="analysisResult.status === 'triggered' ? 'danger' : 'info'" style="margin-left:12px;">
+        {{ analysisResult.status === 'triggered' ? `触发 ${analysisResult.triggered_rules.length} 条专家规则` : '未触发专家规则' }}
+        · 耗时 {{ analysisResult.elapsed_ms }} ms
+      </el-tag>
     </div>
 
-    <!-- Causal Graph -->
+    <!-- 4-level Causal Graph -->
     <el-card shadow="never" class="graph-card">
-      <template #header><span style="font-weight:600">因果图</span></template>
-      <VChart v-if="causalGraph" :option="graphOption" style="height:400px;width:100%;" autoresize />
+      <template #header>
+        <span style="font-weight:600">因果图（4级：征兆 → 子系统 → 根因 → 触发规则）</span>
+      </template>
+      <VChart v-if="causalGraph" :option="graphOption" style="height:420px;width:100%;" autoresize />
       <el-empty v-else description="请先执行根因推理" />
     </el-card>
 
-    <!-- Candidate Root Causes -->
-    <el-card shadow="never" class="candidates-card">
-      <template #header><span style="font-weight:600">候选根因（按置信度排序）</span></template>
-      <el-table v-if="candidates.length > 0" :data="candidates" stripe size="small">
-        <el-table-column prop="name" label="根因名称" min-width="140" />
+    <!-- Triggered Rules (from actual analysis, not random) -->
+    <el-card shadow="never" class="rules-card">
+      <template #header><span style="font-weight:600">触发的专家规则（按置信度排序）</span></template>
+      <el-table v-if="analysisResult && analysisResult.triggered_rules.length > 0" :data="analysisResult.triggered_rules" stripe size="small">
+        <el-table-column prop="rule_name" label="规则名称" min-width="180" />
         <el-table-column label="置信度" width="100" align="center">
           <template #default="{ row }">
             <el-tag :color="confidenceColor(row.confidence)" effect="dark" size="small" style="color:#fff;border:none;">
@@ -200,36 +236,106 @@ onMounted(() => { handleRunDiagnosis() })
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="推理路径" min-width="250">
+        <el-table-column label="严重度" width="80" align="center">
           <template #default="{ row }">
-            <span v-for="(p, idx) in row.path" :key="idx">
-              <span :style="{ color: idx === row.path.length - 1 ? '#f56c6c' : '#606266', fontWeight: idx === row.path.length - 1 ? 600 : 400 }">{{ p }}</span>
-              <span v-if="idx < row.path.length - 1" style="color:#c0c4cc;margin:0 4px;">→</span>
+            <el-tag :type="severityTagType(row.severity)" size="small">{{ row.severity }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="诊断链路" min-width="250">
+          <template #default="{ row }">
+            <span style="color:#909399;font-size:12px;">
+              {{ row.symptom_tag }} → {{ row.subsystem_tag }} → {{ row.root_cause_tag }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="关联证据" min-width="200">
+        <el-table-column prop="conclusion" label="诊断结论" min-width="260" show-overflow-tooltip />
+        <el-table-column label="异常参数" min-width="180">
           <template #default="{ row }">
-            <el-tag v-for="ev in row.evidence" :key="ev" size="small" type="info" style="margin-right:4px;">{{ ev }}</el-tag>
+            <el-tag v-for="(info, param) in row.matched_params" :key="param" size="small" type="warning" style="margin:2px;">
+              {{ param }} {{ info.op }} {{ info.threshold }} ({{ info.value }})
+            </el-tag>
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-else description="无候选根因" :image-size="60" />
+      <el-empty v-else-if="analysisResult" description="未触发任何专家规则" :image-size="60" />
+      <el-empty v-else description="请先执行根因推理" :image-size="60" />
     </el-card>
 
     <!-- Evidence Chain — Tree Chart -->
     <el-card shadow="never" class="evidence-tree-card">
-      <template #header><span style="font-weight:600">证据链（逐级分析链条）</span></template>
-      <VChart v-if="evidenceTreeData.length > 0" :option="evidenceTreeChartOption" style="height:350px;width:100%;" autoresize />
-      <el-empty v-else description="无证据链数据" :image-size="60" />
+      <template #header><span style="font-weight:600">证据链（4级推理链条）</span></template>
+      <VChart v-if="causalGraph && (analysisResult?.diagnosis_chains?.length || causalGraph)" :option="evidenceTreeOption" style="height:380px;width:100%;" autoresize />
+      <el-empty v-else description="请先执行根因推理" :image-size="60" />
     </el-card>
 
-    <!-- Diagnosis Conclusion -->
-    <el-card shadow="never" class="conclusion-card">
-      <template #header><span style="font-weight:600">诊断结论</span></template>
-      <div v-if="diagnosisResult" class="conclusion-text">{{ diagnosisResult }}</div>
-      <div v-else-if="diagnosisError"><el-alert :title="diagnosisError" type="error" :closable="false" /></div>
-      <el-empty v-else description="请先执行根因推理" :image-size="60" />
+    <!-- Diagnosis Chains Detail -->
+    <el-card v-if="analysisResult && analysisResult.diagnosis_chains.length > 0" shadow="never" class="chains-card">
+      <template #header><span style="font-weight:600">诊断链路详情</span></template>
+      <el-timeline>
+        <el-timeline-item
+          v-for="chain in analysisResult.diagnosis_chains"
+          :key="chain.rule_id"
+          :type="chain.severity === '高' ? 'danger' : 'warning'"
+          :timestamp="`置信度 ${(chain.confidence * 100).toFixed(1)}%`"
+          placement="top"
+        >
+          <div style="margin-bottom:6px;">
+            <span v-for="(step, idx) in chain.chain" :key="idx">
+              <span :style="{ fontWeight: idx === chain.chain.length - 1 ? 600 : 400, color: idx === 0 ? '#e6a23c' : idx === 1 ? '#409eff' : idx === 2 ? '#f56c6c' : '#9b59b6' }">
+                {{ step }}
+              </span>
+              <span v-if="idx < chain.chain.length - 1" style="color:#c0c4cc;margin:0 6px;">→</span>
+            </span>
+          </div>
+          <div style="font-size:13px;color:#606266;">{{ chain.conclusion }}</div>
+          <div v-if="chain.recommended_actions" style="margin-top:6px;font-size:12px;color:#909399;white-space:pre-line;">{{ chain.recommended_actions }}</div>
+        </el-timeline-item>
+      </el-timeline>
+    </el-card>
+
+    <!-- Anomalies -->
+    <el-card v-if="analysisResult && analysisResult.anomalies.length > 0" shadow="never" class="anomalies-card">
+      <template #header><span style="font-weight:600">检测到的参数异常</span></template>
+      <el-table :data="analysisResult.anomalies" stripe size="small">
+        <el-table-column prop="param" label="参数" min-width="160" />
+        <el-table-column label="当前值" width="120" align="center">
+          <template #default="{ row }">
+            <span style="color:#f56c6c;font-weight:600;">{{ row.value }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="阈值" width="120" align="center">
+          <template #default="{ row }">
+            {{ row.direction }} {{ row.threshold }}
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <!-- Wiki References -->
+    <el-card v-if="analysisResult && analysisResult.wiki_references.length > 0" shadow="never" class="wiki-card">
+      <template #header><span style="font-weight:600">相关技术知识</span></template>
+      <el-table :data="analysisResult.wiki_references" stripe size="small">
+        <el-table-column prop="title" label="词条标题" min-width="180" />
+        <el-table-column prop="snippet" label="内容摘要" min-width="360" show-overflow-tooltip />
+        <el-table-column label="相关度" width="90" align="center">
+          <template #default="{ row }">
+            {{ row.relevance_score ? (row.relevance_score).toFixed(1) : '-' }}
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <!-- Suggestions -->
+    <el-card v-if="analysisResult && analysisResult.suggestions.length > 0" shadow="never" class="suggestions-card">
+      <template #header><span style="font-weight:600">诊断建议</span></template>
+      <div class="suggestions-text">
+        <div v-for="(s, idx) in analysisResult.suggestions" :key="idx" style="margin-bottom:4px;">{{ s }}</div>
+      </div>
+    </el-card>
+
+    <!-- Error -->
+    <el-card v-if="diagnosisError" shadow="never">
+      <el-alert :title="diagnosisError" type="error" :closable="false" />
     </el-card>
   </div>
 </template>
@@ -241,7 +347,23 @@ onMounted(() => { handleRunDiagnosis() })
   gap: 16px;
   padding-bottom: 24px;
 }
-.page-header { flex-shrink: 0; }
-.graph-card, .candidates-card, .evidence-tree-card, .conclusion-card { border-radius: 8px; }
-.conclusion-text { font-size: 14px; line-height: 1.8; color: #303133; white-space: pre-wrap; }
+.page-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+.graph-card,
+.rules-card,
+.evidence-tree-card,
+.chains-card,
+.anomalies-card,
+.wiki-card,
+.suggestions-card {
+  border-radius: 8px;
+}
+.suggestions-text {
+  font-size: 14px;
+  line-height: 1.8;
+  color: #303133;
+}
 </style>

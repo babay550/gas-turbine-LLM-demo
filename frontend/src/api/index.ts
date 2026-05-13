@@ -28,6 +28,17 @@ import type {
   ExpertRuleListResponse,
   VectorKBSourceListResponse,
   CausalGraph,
+  WikiEntryListResponse,
+  WikiEntry,
+  WikiStatsResponse,
+  WikiUploadResult,
+  WikiQAResponse,
+  RawFileInfo,
+  WikiGraphData,
+  WorkflowDefinition,
+  NodeTypeDef,
+  ExecutionResult,
+  RootCauseAnalysisResult,
 } from '../types'
 
 const http = axios.create({
@@ -72,8 +83,8 @@ export async function runDecomposition(): Promise<DecompositionResult> {
   return res.data
 }
 
-export async function runRootCause(): Promise<RootCauseResult> {
-  const res = await http.post<RootCauseResult>('/analysis/root-cause')
+export async function runRootCause(query?: string): Promise<RootCauseAnalysisResult> {
+  const res = await http.post<RootCauseAnalysisResult>('/analysis/root-cause', query ? { query } : undefined)
   return res.data
 }
 
@@ -190,5 +201,130 @@ export async function addVectorKBSource(payload: { name: string; url: string; em
 
 export async function testVectorKBConnection(sourceId: string): Promise<ModelTestResult> {
   const res = await http.post<ModelTestResult>(`/knowledge/knowledge/vector-sources/${encodeURIComponent(sourceId)}/test`)
+  return res.data
+}
+
+// ---- Wiki 技术知识库 ----
+
+export async function getWikiEntries(params?: {
+  type?: string; category?: string; tag?: string; search?: string
+  page?: number; page_size?: number
+}): Promise<WikiEntryListResponse> {
+  const res = await http.get<WikiEntryListResponse>('/knowledge/knowledge/wiki/entries', { params })
+  return res.data
+}
+
+export async function getWikiEntry(entryId: string): Promise<WikiEntry> {
+  const res = await http.get<WikiEntry>(`/knowledge/knowledge/wiki/entries/${encodeURIComponent(entryId)}`)
+  return res.data
+}
+
+export async function updateWikiEntry(entryId: string, data: Partial<WikiEntry>): Promise<{ success: boolean }> {
+  const res = await http.put<{ success: boolean }>(`/knowledge/knowledge/wiki/entries/${encodeURIComponent(entryId)}`, data)
+  return res.data
+}
+
+export async function deleteWikiEntry(entryId: string): Promise<{ success: boolean }> {
+  const res = await http.delete<{ success: boolean }>(`/knowledge/knowledge/wiki/entries/${encodeURIComponent(entryId)}`)
+  return res.data
+}
+
+export async function uploadWikiDocument(file: File, autoGenerate = true): Promise<WikiUploadResult> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('auto_generate', String(autoGenerate))
+  const res = await http.post<WikiUploadResult>('/knowledge/knowledge/wiki/upload', form, {
+    timeout: 300000,
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return res.data
+}
+
+export async function getWikiCategories(): Promise<string[]> {
+  const res = await http.get<{ categories: string[] }>('/knowledge/knowledge/wiki/categories')
+  return res.data.categories
+}
+
+export async function getWikiTags(): Promise<string[]> {
+  const res = await http.get<{ tags: string[] }>('/knowledge/knowledge/wiki/tags')
+  return res.data.tags
+}
+
+export async function getWikiStats(): Promise<WikiStatsResponse> {
+  const res = await http.get<WikiStatsResponse>('/knowledge/knowledge/wiki/stats')
+  return res.data
+}
+
+export async function wikiQA(query: string): Promise<WikiQAResponse> {
+  const res = await http.post<WikiQAResponse>('/knowledge/knowledge/wiki/qa', { query })
+  return res.data
+}
+
+export async function rebuildWikiIndex(): Promise<{ success: boolean }> {
+  const res = await http.post<{ success: boolean }>('/knowledge/knowledge/wiki/rebuild-index')
+  return res.data
+}
+
+export async function getWikiRawFiles(): Promise<{ files: RawFileInfo[]; total: number }> {
+  const res = await http.get<{ files: RawFileInfo[]; total: number }>('/knowledge/knowledge/wiki/raw-files')
+  return res.data
+}
+
+export async function getWikiRawFile(filename: string): Promise<{ filename: string; content: string; type: string }> {
+  const res = await http.get<{ filename: string; content: string; type: string }>(`/knowledge/knowledge/wiki/raw-files/${encodeURIComponent(filename)}`)
+  return res.data
+}
+
+export async function getWikiGraph(): Promise<WikiGraphData> {
+  const res = await http.get<WikiGraphData>('/knowledge/knowledge/wiki/graph')
+  return res.data
+}
+
+export async function getWikiIndexContent(): Promise<string> {
+  const res = await http.get<{ content: string }>('/knowledge/knowledge/wiki/index')
+  return res.data.content
+}
+
+export async function getWikiLogContent(): Promise<string> {
+  const res = await http.get<{ content: string }>('/knowledge/knowledge/wiki/log')
+  return res.data.content
+}
+
+// ---- Workflow ----
+
+export async function getWorkflows(): Promise<WorkflowDefinition[]> {
+  const res = await http.get<WorkflowDefinition[]>('/workflow/list')
+  return res.data
+}
+
+export async function getWorkflow(id: string): Promise<WorkflowDefinition> {
+  const res = await http.get<WorkflowDefinition>(`/workflow/${encodeURIComponent(id)}`)
+  return res.data
+}
+
+export async function saveWorkflow(data: WorkflowDefinition): Promise<{ success: boolean; id: string }> {
+  const res = await http.post<{ success: boolean; id: string }>('/workflow', data)
+  return res.data
+}
+
+export async function deleteWorkflow(id: string): Promise<{ success: boolean }> {
+  const res = await http.delete<{ success: boolean }>(`/workflow/${encodeURIComponent(id)}`)
+  return res.data
+}
+
+export async function getWorkflowTemplates(): Promise<WorkflowDefinition[]> {
+  const res = await http.get<WorkflowDefinition[]>('/workflow/templates')
+  return res.data
+}
+
+export async function getWorkflowNodeTypes(): Promise<NodeTypeDef[]> {
+  const res = await http.get<NodeTypeDef[]>('/workflow/node-types')
+  return res.data
+}
+
+export async function executeWorkflow(id: string, userInput: string): Promise<ExecutionResult> {
+  const res = await http.post<ExecutionResult>(`/workflow/${encodeURIComponent(id)}/execute`, {
+    user_input: userInput,
+  })
   return res.data
 }

@@ -59,6 +59,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/ModelKnowledge.vue'),
     meta: { title: '模型与知识库' },
   },
+  {
+    path: '/workflow',
+    name: 'WorkflowEditor',
+    component: () => import('../views/WorkflowEditor.vue'),
+    meta: { title: '工作流编排' },
+  },
 ]
 
 const router = createRouter({

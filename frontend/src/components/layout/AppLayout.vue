@@ -12,6 +12,7 @@ import {
   Timer,
   Notebook,
   Collection,
+  Share,
   ChatDotSquare,
 } from '@element-plus/icons-vue'
 
@@ -31,6 +32,7 @@ const menuItems = [
   { index: '/schedule', icon: Timer, title: '调度管理' },
   { index: '/dictionary', icon: Notebook, title: '数据字典' },
   { index: '/knowledge', icon: Collection, title: '模型与知识库' },
+  { index: '/workflow', icon: Share, title: '工作流编排' },
 ]
 
 const activeMenu = computed(() => route.path)
