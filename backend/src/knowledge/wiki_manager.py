@@ -68,7 +68,19 @@ class WikiManager:
         self.root = os.path.abspath(knowledge_root)
         self.wiki_dir = os.path.join(self.root, "wiki")
         self.raw_dir = os.path.join(self.root, "raw")
+        self._chunk_store = None
         self._ensure_dirs()
+
+    @property
+    def chunk_store(self):
+        """懒加载 ChunkStore。"""
+        if self._chunk_store is None:
+            try:
+                from src.knowledge.chunk_store import ChunkStore
+                self._chunk_store = ChunkStore(self)
+            except Exception as e:
+                logger.warning("ChunkStore 加载失败，将使用 bigram 搜索: %s", e)
+        return self._chunk_store
 
     # ------------------------------------------------------------------
     # 目录初始化
@@ -298,8 +310,16 @@ class WikiManager:
         page_items = filtered[start:start + page_size]
         return page_items, total
 
-    def search_entries(self, query: str, limit: int = 20) -> list[dict]:
-        """全文搜索 — 中文 bigram + 关键词匹配，累加得分。"""
+    def search_entries(self, query: str, limit: int = 20, use_hybrid: bool = True) -> list[dict]:
+        """全文搜索 — 优先使用混合检索（BM25+Embedding+RRF），回退到 bigram 匹配。"""
+        if use_hybrid:
+            cs = self.chunk_store
+            if cs and cs.chunks:
+                results = cs.search(query, limit=limit)
+                if results:
+                    return results
+
+        # Fallback: 原有 bigram 搜索
         all_entries = self._scan_all_files()
         query_lower = query.lower()
 

@@ -78,9 +78,9 @@ class WikiQA:
                 "processing_time_ms": elapsed,
             }
 
-        # ── Step 2: 关键词搜索匹配词条（毫秒级），LLM 索引匹配作为 fallback ──
-        results = self.wiki_manager.search_entries(query, limit=5)
-        matched_ids = [r["id"] for r in results]
+        # ── Step 2: 混合检索匹配词条（BM25+Embedding+RRF），LLM 索引匹配作为 fallback ──
+        results = self.wiki_manager.search_entries(query, limit=5, use_hybrid=True)
+        matched_ids = [r.get("entry_id") or r.get("id") for r in results]
 
         if not matched_ids:
             # Fallback: LLM 从索引中匹配

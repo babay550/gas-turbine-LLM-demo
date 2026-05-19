@@ -22,23 +22,30 @@ def wiki_search(query: str) -> str:
         query: 搜索关键词或问题描述
     """
     wiki_mgr = _get_wiki_manager()
-    results = wiki_mgr.search_entries(query, limit=8)
+    results = wiki_mgr.search_entries(query, limit=8, use_hybrid=True)
     if not results:
         return json.dumps({"total": 0, "message": "未找到相关知识词条"}, ensure_ascii=False)
 
     items = []
     for r in results:
-        entry = wiki_mgr.get_entry(r["id"])
-        content_preview = ""
-        if entry:
-            content_preview = entry.content[:500]
+        entry_id = r.get("entry_id") or r.get("id")
+        # 混合检索结果已含 content 和 heading；bigram 结果需单独加载
+        if "content" in r and r.get("heading") is not None:
+            content_preview = r["content"][:500]
+            heading = r.get("heading", "")
+        else:
+            entry = wiki_mgr.get_entry(entry_id)
+            content_preview = entry.content[:500] if entry else ""
+            heading = ""
         items.append({
-            "id": r["id"],
+            "id": entry_id,
             "title": r["title"],
             "type": r["type"],
             "category": r["category"],
             "tags": r.get("tags", []),
             "severity": r.get("severity", ""),
+            "heading": heading,
+            "score": r.get("score", r.get("_score", 0)),
             "content_preview": content_preview,
         })
 

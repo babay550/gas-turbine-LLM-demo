@@ -83,6 +83,17 @@ async def lifespan(app: FastAPI):
     wiki_manager = WikiManager(knowledge_root)
     _migrate_mock_to_wiki(wiki_manager)
 
+    # 初始化混合检索引擎（BM25 + Embedding + RRF）
+    data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "chunk_store"))
+    os.makedirs(data_dir, exist_ok=True)
+    try:
+        cs = wiki_manager.chunk_store
+        if cs:
+            cs.rebuild_index()
+            logger.info("ChunkStore 混合检索引擎初始化完成")
+    except Exception as e:
+        logger.warning("ChunkStore 初始化失败，将使用 bigram 搜索: %s", e)
+
     app.state.scheduler = scheduler
     app.state.trigger_engine = trigger_engine
     app.state.agent = agent

@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     # 数据模式
     data_mode: str = "mock"
 
+    # 混合检索配置
+    embedding_enabled: bool = True
+    embedding_batch_size: int = 32
+    rrf_k: int = 60
+    chunk_max_size: int = 800
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     @property
