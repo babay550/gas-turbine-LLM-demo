@@ -17,6 +17,7 @@ import type {
   ChatMessage,
   ChatCitation,
   DebugLogEntry,
+  ChatSession,
 } from '../types'
 import * as api from '../api'
 
@@ -260,27 +261,82 @@ interface ChatState {
   messages: ChatMessage[]
   loading: boolean
   error: string | null
+  currentSessionId: string | null
+  sessions: ChatSession[]
 }
 
 const _chat = reactive<ChatState>({
   messages: [],
   loading: false,
   error: null,
+  currentSessionId: null,
+  sessions: [],
 })
 
 export const chatStore = readonly(_chat)
 
-export function clearChat() {
-  _chat.messages = []
-  _chat.error = null
+export async function loadSessions() {
+  try {
+    const res = await api.getChatSessions()
+    _chat.sessions = res.sessions
+  } catch {
+    // ignore — non-critical
+  }
+}
+
+export async function createSession() {
+  try {
+    const session = await api.createChatSession()
+    _chat.currentSessionId = session.id
+    _chat.messages = []
+    _chat.error = null
+    await loadSessions()
+    return session
+  } catch (e: unknown) {
+    console.warn('createSession failed:', e)
+    return null
+  }
+}
+
+export async function switchSession(id: string) {
+  try {
+    const detail = await api.getChatSession(id)
+    _chat.currentSessionId = id
+    _chat.messages = detail.messages || []
+    _chat.error = null
+  } catch (e: unknown) {
+    _chat.error = e instanceof Error ? e.message : String(e)
+  }
+}
+
+export async function deleteSession(id: string) {
+  try {
+    await api.deleteChatSession(id)
+    if (_chat.currentSessionId === id) {
+      _chat.currentSessionId = null
+      _chat.messages = []
+    }
+    await loadSessions()
+  } catch {
+    // ignore
+  }
 }
 
 export async function sendChatMessage(message: string) {
+  // Ensure we have a session (non-blocking — if it fails, send without session_id)
+  if (!_chat.currentSessionId) {
+    const session = await createSession()
+    if (!session) {
+      // Session creation failed — proceed without persistence
+      console.warn('Proceeding without session persistence')
+    }
+  }
+
   _chat.messages.push({ role: 'user', content: message })
   _chat.loading = true
   _chat.error = null
   try {
-    const res = await api.sendMessage({ message })
+    const res = await api.sendMessage({ message, session_id: _chat.currentSessionId || undefined })
     const citations: ChatCitation[] = res.citations || []
     const debugLogs: DebugLogEntry[] = res.debug_logs || []
     _chat.messages.push({ role: 'assistant', content: res.answer, citations, debug_logs: debugLogs })
@@ -290,5 +346,6 @@ export async function sendChatMessage(message: string) {
     _chat.messages.push({ role: 'assistant', content: `分析出错: ${errMsg}`, citations: [], debug_logs: [] })
   } finally {
     _chat.loading = false
+    loadSessions()
   }
 }

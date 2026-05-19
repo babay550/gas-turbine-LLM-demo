@@ -299,26 +299,73 @@ class WikiManager:
         return page_items, total
 
     def search_entries(self, query: str, limit: int = 20) -> list[dict]:
-        """全文搜索，返回匹配词条的元数据列表。"""
+        """全文搜索 — 中文 bigram + 关键词匹配，累加得分。"""
         all_entries = self._scan_all_files()
         query_lower = query.lower()
+
+        # 1. 按空格/标点拆分为词组
+        import re as _re
+        raw_terms = [t for t in _re.split(r"[\s，。、？！；：""''（）【】《》]+", query_lower) if t]
+
+        # 2. 对长度 > 4 的词组（中文无分隔），提取 2 字 bigram
+        terms = []
+        for t in raw_terms:
+            if len(t) <= 4:
+                terms.append(t)
+            else:
+                # 整词也算一个 term
+                terms.append(t)
+                # 提取 bigram
+                for i in range(len(t) - 1):
+                    bigram = t[i:i + 2]
+                    terms.append(bigram)
+
+        # 去重
+        seen = set()
+        unique_terms = []
+        for t in terms:
+            if t not in seen:
+                seen.add(t)
+                unique_terms.append(t)
+        terms = unique_terms
+
+        if not terms:
+            terms = [query_lower]
+
+        # 3. 逐词条匹配评分
         scored = []
         for entry in all_entries:
             score = 0
-            if query_lower in entry.title.lower():
-                score += 10
-            if query_lower in entry.category.lower():
-                score += 5
-            for t in entry.tags:
-                if query_lower in t.lower():
-                    score += 5
-            if query_lower in entry.content.lower():
-                score += 3
-            if query_lower in entry.frontmatter.get("equipment", "").lower():
-                score += 3
+            title_lower = entry.title.lower()
+            category_lower = entry.category.lower()
+            content_lower = entry.content.lower()
+            equipment_lower = entry.frontmatter.get("equipment", "").lower()
+            tags_lower = [t.lower() for t in entry.tags]
+
+            for term in terms:
+                # bigram (2 字) 权重低，长词组权重高
+                w = 1 if len(term) <= 2 else 3
+                if term in title_lower:
+                    score += 10 * w
+                if term in category_lower:
+                    score += 5 * w
+                if any(term in tl for tl in tags_lower):
+                    score += 5 * w
+                if term in content_lower:
+                    score += 2 * w
+                if term in equipment_lower:
+                    score += 3 * w
+
+            # 完整 query 匹配额外加分
+            if query_lower in title_lower:
+                score += 30
+            if query_lower in content_lower:
+                score += 15
+
             if score > 0:
                 meta = entry.to_meta_dict()
                 meta["_score"] = score
+                meta["content_preview"] = entry.content[:200]
                 scored.append(meta)
         scored.sort(key=lambda x: x["_score"], reverse=True)
         return scored[:limit]
@@ -365,7 +412,7 @@ class WikiManager:
     # ------------------------------------------------------------------
 
     def rebuild_index(self):
-        """重建 wiki/index.md 索引文件。"""
+        """重建 wiki/index.md 索引文件（含一句话摘要）。"""
         all_entries = self._scan_all_files()
         lines = ["# 内容索引\n", f"> 自动生成于 {datetime.now().strftime('%Y-%m-%d %H:%M')}，共 {len(all_entries)} 条词条\n"]
 
@@ -383,7 +430,6 @@ class WikiManager:
 
         for etype in WIKI_SUBDIRS:
             full_type = etype if "_" not in etype else etype
-            # 映射 subdir name 到 type name
             type_name_map = {
                 "content": "content_summary",
                 "entity": "entity",
@@ -398,10 +444,24 @@ class WikiManager:
             label = type_labels.get(full_type, full_type)
             lines.append(f"\n## {label}（{len(entries)} 条）\n")
             for e in sorted(entries, key=lambda x: x.id):
-                lines.append(f"- **{e.id}** {e.title}  ")
+                # 提取正文第一行非标题文本作为摘要
+                summary = self._first_prose_line(e.content)
+                lines.append(f"- **{e.id}** {e.title} — {summary}")
 
         with open(os.path.join(self.wiki_dir, "index.md"), "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
+
+    @staticmethod
+    def _first_prose_line(content: str, max_len: int = 120) -> str:
+        """提取正文中第一个非标题、非空行的文本段落（截断）。"""
+        for line in content.split("\n"):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if len(line) > max_len:
+                return line[:max_len] + "..."
+            return line
+        return ""
 
     def append_log(self, action: str, detail: str):
         """向 wiki/log.md 追加操作记录。"""

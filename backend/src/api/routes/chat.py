@@ -5,6 +5,8 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
+from src.api.routes.chat_sessions import append_message
+
 router = APIRouter()
 
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -123,6 +125,7 @@ async def send_message(request: Request):
     """发送对话消息，获取 Agent 回复（同步接口）。"""
     body = await request.json()
     query = body.get("message", "")
+    session_id = body.get("session_id")
 
     scheduler = request.app.state.scheduler
 
@@ -131,22 +134,37 @@ async def send_message(request: Request):
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(_executor, scheduler.dispatch, query)
         citations = _build_citations(result.get("tool_results", []))
+        answer = result.get("answer", "")
+        debug_logs = result.get("debug_logs", [])
+
+        if session_id:
+            append_message(session_id, "user", query)
+            append_message(session_id, "assistant", answer, citations, debug_logs)
+
         return {
-            "answer": result.get("answer", ""),
+            "answer": answer,
             "citations": citations,
             "tool_results": result.get("tool_results", []),
-            "debug_logs": result.get("debug_logs", []),
+            "debug_logs": debug_logs,
         }
     except FuturesTimeoutError:
+        answer = "分析超时，LLM 服务可能响应较慢。当前可直接使用面板按钮触发分析。"
+        if session_id:
+            append_message(session_id, "user", query)
+            append_message(session_id, "assistant", answer)
         return {
-            "answer": "分析超时，LLM 服务可能响应较慢。当前可直接使用面板按钮触发分析。",
+            "answer": answer,
             "citations": [],
             "tool_results": [],
             "debug_logs": [{"step": "dispatch", "status": "timeout", "detail": "执行超时"}],
         }
     except Exception as e:
+        answer = f"当前 LLM 服务未连接（{e}），请使用面板按钮直接触发分析，或配置 .env 中的 LLM 地址后重启。"
+        if session_id:
+            append_message(session_id, "user", query)
+            append_message(session_id, "assistant", answer)
         return {
-            "answer": f"当前 LLM 服务未连接（{e}），请使用面板按钮直接触发分析，或配置 .env 中的 LLM 地址后重启。",
+            "answer": answer,
             "citations": [],
             "tool_results": [],
             "debug_logs": [{"step": "dispatch", "status": "error", "detail": str(e)}],

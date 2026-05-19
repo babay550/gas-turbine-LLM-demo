@@ -14,6 +14,8 @@ import type {
   RootCauseResult,
   ChatRequest,
   ChatResponse,
+  ChatSession,
+  ChatSessionDetail,
   ScheduleTask,
   AddTaskRequest,
   ExecutionLog,
@@ -93,6 +95,28 @@ export async function runRootCause(query?: string): Promise<RootCauseAnalysisRes
 export async function sendMessage(payload: ChatRequest): Promise<ChatResponse> {
   // Agent 需要多轮 LLM 调用（意图识别→工具执行→总结），给足够时间
   const res = await http.post<ChatResponse>('/chat/message', payload, { timeout: 180000 })
+  return res.data
+}
+
+// ---- Chat Sessions ----
+
+export async function getChatSessions(): Promise<{ sessions: ChatSession[]; total: number }> {
+  const res = await http.get<{ sessions: ChatSession[]; total: number }>('/chat/sessions')
+  return res.data
+}
+
+export async function createChatSession(): Promise<ChatSessionDetail> {
+  const res = await http.post<ChatSessionDetail>('/chat/sessions')
+  return res.data
+}
+
+export async function getChatSession(id: string): Promise<ChatSessionDetail> {
+  const res = await http.get<ChatSessionDetail>(`/chat/sessions/${encodeURIComponent(id)}`)
+  return res.data
+}
+
+export async function deleteChatSession(id: string): Promise<{ success: boolean }> {
+  const res = await http.delete<{ success: boolean }>(`/chat/sessions/${encodeURIComponent(id)}`)
   return res.data
 }
 
@@ -256,7 +280,8 @@ export async function getWikiStats(): Promise<WikiStatsResponse> {
 }
 
 export async function wikiQA(query: string): Promise<WikiQAResponse> {
-  const res = await http.post<WikiQAResponse>('/knowledge/knowledge/wiki/qa', { query })
+  // Wiki QA 需要 LLM 检索+生成，耗时较长
+  const res = await http.post<WikiQAResponse>('/knowledge/knowledge/wiki/qa', { query }, { timeout: 180000 })
   return res.data
 }
 

@@ -1,6 +1,14 @@
-"""Wiki 问答服务 — 基于 wiki 词条的检索增强问答。"""
+"""Wiki 问答服务 — 基于索引匹配 + 词条内容检索的问答。
+
+查询流程：
+  1. 读取 index.md（全 wiki 的目录 + 一句话摘要）
+  2. LLM 从索引中匹配与 query 相关的词条 ID
+  3. 读取匹配词条的完整内容 + 跟随 [[xxx]] 内部链接
+  4. LLM 综合所有内容生成回答，标注来源
+"""
 
 import logging
+import re
 import time
 
 from langchain_openai import ChatOpenAI
@@ -11,7 +19,7 @@ from src.knowledge.wiki_manager import WikiManager
 
 logger = logging.getLogger(__name__)
 
-QA_SYSTEM_PROMPT = """你是一个燃气轮机运维知识库问答专家。请基于提供的知识库词条内容回答用户问题。
+QA_SYSTEM_PROMPT = """你是燃气轮机运维知识库问答专家。请基于提供的知识库词条内容回答用户问题。
 
 ## 回答规则
 1. 基于提供的词条内容回答，不要编造信息
@@ -19,6 +27,20 @@ QA_SYSTEM_PROMPT = """你是一个燃气轮机运维知识库问答专家。请�
 3. 如果提供的词条不足以回答问题，如实说明并建议补充相关资料
 4. 对于根因分析类问题，给出因果推理追溯链
 5. 使用清晰的 markdown 格式，善用列表、表格等结构化表达"""
+
+# Step 2: LLM 从索引中匹配相关词条 ID
+MATCH_PROMPT = """你是一个知识库检索助手。下面是知识库的完整索引（每条包含 ID、标题、摘要）。
+
+## 知识库索引
+
+{index}
+
+## 用户问题
+{query}
+
+## 任务
+从索引中找出与用户问题相关的词条。返回格式：每行一个词条 ID（如 W001），不要其他内容。
+如果没有相关词条，回复 NONE。"""
 
 
 class WikiQA:
@@ -42,14 +64,35 @@ class WikiQA:
     async def answer(self, query: str) -> dict:
         """基于 wiki 知识库回答问题。
 
-        Returns:
-            {"answer": str, "citations": list[dict], "processing_time_ms": int}
+        流程：读索引 → LLM 匹配词条 → 读页面内容 + 跟随链接 → LLM 生成回答
         """
         start_time = time.monotonic()
 
-        # 1. 检索相关词条
-        related = self.wiki_manager.search_entries(query, limit=8)
-        if not related:
+        # ── Step 1: 读取 index.md ──
+        index_content = self.wiki_manager.get_index()
+        if not index_content or len(index_content) < 50:
+            elapsed = round((time.monotonic() - start_time) * 1000)
+            return {
+                "answer": "知识库索引为空，请先上传技术文档。",
+                "citations": [],
+                "processing_time_ms": elapsed,
+            }
+
+        # ── Step 2: 关键词搜索匹配词条（毫秒级），LLM 索引匹配作为 fallback ──
+        results = self.wiki_manager.search_entries(query, limit=5)
+        matched_ids = [r["id"] for r in results]
+
+        if not matched_ids:
+            # Fallback: LLM 从索引中匹配
+            try:
+                match_response = self._llm.invoke([
+                    HumanMessage(content=MATCH_PROMPT.format(index=index_content, query=query)),
+                ])
+                matched_ids = self._parse_matched_ids(match_response.content)
+            except Exception as e:
+                logger.warning("LLM 索引匹配也失败: %s", e)
+
+        if not matched_ids:
             elapsed = round((time.monotonic() - start_time) * 1000)
             return {
                 "answer": "知识库中暂无与您的问题相关的词条。请先上传相关技术文档，系统会自动提取知识。",
@@ -57,26 +100,18 @@ class WikiQA:
                 "processing_time_ms": elapsed,
             }
 
-        # 2. 读取完整词条内容
-        contexts = []
-        citations = []
-        for meta in related:
-            entry = self.wiki_manager.get_entry(meta["id"])
-            if not entry:
-                continue
-            # 截取相关片段
-            snippet = self._extract_relevant_snippet(entry.content, query)
-            contexts.append(f"### 词条 {entry.id}: {entry.title}\n类型: {entry.type} | 分类: {entry.category}\n\n{snippet}")
-            citations.append({
-                "entry_id": entry.id,
-                "title": entry.title,
-                "type": entry.type,
-                "category": entry.category,
-                "relevance_score": meta.get("_score", 0),
-                "snippet": snippet[:300],
-            })
+        # ── Step 3: 读取匹配词条内容 + 跟随 [[xxx]] 链接 ──
+        contexts, citations = self._load_entries_with_links(matched_ids)
 
-        # 3. 构建 prompt 并调用 LLM
+        if not contexts:
+            elapsed = round((time.monotonic() - start_time) * 1000)
+            return {
+                "answer": "匹配到词条但无法读取内容，请检查知识库状态。",
+                "citations": [],
+                "processing_time_ms": elapsed,
+            }
+
+        # ── Step 4: LLM 综合回答 ──
         context_text = "\n\n---\n\n".join(contexts)
         user_message = f"""## 知识库参考资料
 
@@ -96,7 +131,7 @@ class WikiQA:
             ])
             answer = response.content
         except Exception as e:
-            logger.error("Wiki QA LLM 调用失败: %s", e)
+            logger.error("Wiki QA LLM 回答生成失败: %s", e)
             answer = f"LLM 服务暂时不可用（{e}），以下是与您问题相关的知识库词条：\n\n"
             for c in citations:
                 answer += f"- **{c['entry_id']}** {c['title']}\n"
@@ -108,28 +143,57 @@ class WikiQA:
             "processing_time_ms": elapsed,
         }
 
-    @staticmethod
-    def _extract_relevant_snippet(content: str, query: str, max_length: int = 1000) -> str:
-        """从词条内容中提取与 query 最相关的片段。"""
-        if len(content) <= max_length:
-            return content
+    def _parse_matched_ids(self, llm_response: str) -> list[str]:
+        """从 LLM 回复中解析词条 ID 列表。"""
+        ids = []
+        for line in llm_response.strip().split("\n"):
+            line = line.strip()
+            if line.upper() == "NONE" or not line:
+                continue
+            # 提取 W### 格式的 ID
+            match = re.search(r"(W\d+)", line)
+            if match:
+                ids.append(match.group(1))
+        # 去重，保持顺序
+        seen = set()
+        unique = []
+        for eid in ids:
+            if eid not in seen:
+                seen.add(eid)
+                unique.append(eid)
+        return unique[:8]
 
-        query_terms = query.lower().split()
-        best_pos = 0
-        best_score = 0
+    def _load_entries_with_links(self, entry_ids: list[str]) -> tuple[list[str], list[dict]]:
+        """加载词条内容，并跟随 [[xxx]] 内部链接加载关联词条。"""
+        contexts = []
+        citations = []
+        seen_ids = set()
 
-        # 滑动窗口找最相关的段落
-        step = 200
-        for pos in range(0, len(content) - max_length, step):
-            window = content[pos:pos + max_length].lower()
-            score = sum(window.count(t) for t in query_terms)
-            if score > best_score:
-                best_score = score
-                best_pos = pos
+        def load_entry(eid: str, depth: int = 0):
+            if eid in seen_ids or depth > 1:
+                return
+            entry = self.wiki_manager.get_entry(eid)
+            if not entry:
+                return
+            seen_ids.add(eid)
 
-        snippet = content[best_pos:best_pos + max_length]
-        if best_pos > 0:
-            snippet = "..." + snippet
-        if best_pos + max_length < len(content):
-            snippet = snippet + "..."
-        return snippet
+            contexts.append(
+                f"### 词条 {entry.id}: {entry.title}\n"
+                f"类型: {entry.type} | 分类: {entry.category}\n\n{entry.content}"
+            )
+            citations.append({
+                "entry_id": entry.id,
+                "title": entry.title,
+                "type": entry.type,
+                "category": entry.category,
+            })
+
+            # 提取 [[xxx]] 链接并跟随
+            for link_match in re.finditer(r"\[\[(W\d+)", entry.content):
+                linked_id = link_match.group(1)
+                load_entry(linked_id, depth + 1)
+
+        for eid in entry_ids:
+            load_entry(eid)
+
+        return contexts, citations

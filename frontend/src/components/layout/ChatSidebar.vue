@@ -1,22 +1,50 @@
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
-import { chatStore, sendChatMessage } from '../../stores'
+import { ref, nextTick, watch, onMounted } from 'vue'
+import { chatStore, sendChatMessage, createSession, switchSession, deleteSession, loadSessions } from '../../stores'
 import type { DebugLogEntry } from '../../types'
 
 const inputText = ref('')
 const messageListRef = ref<HTMLElement>()
 const showDebug = ref<Record<number, boolean>>({})
 const debugMode = ref(false)
+const showHistory = ref(false)
 
 const props = defineProps<{
   visible: boolean
 }>()
+
+onMounted(() => {
+  loadSessions()
+})
 
 function handleSend() {
   const text = inputText.value.trim()
   if (!text) return
   inputText.value = ''
   sendChatMessage(text)
+}
+
+async function handleNewSession() {
+  await createSession()
+}
+
+async function handleSwitchSession(id: string) {
+  showHistory.value = false
+  await switchSession(id)
+}
+
+async function handleDeleteSession(id: string) {
+  await deleteSession(id)
+}
+
+function formatTime(iso: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const now = new Date()
+  const isToday = d.toDateString() === now.toDateString()
+  const time = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  if (isToday) return time
+  return d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) + ' ' + time
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -104,6 +132,42 @@ watch(
           inactive-text=""
           style="margin-left:auto;"
         />
+      </div>
+      <div class="chat-toolbar">
+        <el-button size="small" @click="handleNewSession" :disabled="chatStore.loading">
+          + 新会话
+        </el-button>
+        <el-popover
+          placement="bottom-end"
+          :width="280"
+          trigger="click"
+          v-model:visible="showHistory"
+        >
+          <template #reference>
+            <el-button size="small" :disabled="chatStore.loading">
+              历史会话 ({{ chatStore.sessions.length }})
+            </el-button>
+          </template>
+          <div class="session-list">
+            <div v-if="chatStore.sessions.length === 0" class="session-empty">暂无历史会话</div>
+            <div
+              v-for="s in chatStore.sessions"
+              :key="s.id"
+              :class="['session-item', s.id === chatStore.currentSessionId ? 'session-active' : '']"
+              @click="handleSwitchSession(s.id)"
+            >
+              <div class="session-info">
+                <div class="session-title">{{ s.title }}</div>
+                <div class="session-meta">{{ formatTime(s.updated) }} · {{ s.message_count }}条</div>
+              </div>
+              <el-popconfirm title="确定删除此会话？" @confirm="handleDeleteSession(s.id)" confirm-button-text="删除" cancel-button-text="取消">
+                <template #reference>
+                  <el-button size="small" text type="danger" @click.stop class="session-del">×</el-button>
+                </template>
+              </el-popconfirm>
+            </div>
+          </div>
+        </el-popover>
       </div>
       <div ref="messageListRef" class="chat-messages">
         <div v-if="chatStore.messages.length === 0" class="chat-empty">
@@ -203,6 +267,17 @@ export default { components: { ChatDotRound, Loading, Promotion } }
   align-items: center;
   padding: 0 16px;
   background: #f5f7fa;
+  flex-shrink: 0;
+}
+
+.chat-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #ebeef5;
+  background: #fafafa;
+  flex-shrink: 0;
 }
 
 .chat-title {
@@ -424,5 +499,64 @@ export default { components: { ChatDotRound, Loading, Promotion } }
 .chat-slide-leave-to {
   transform: translateX(100%);
   opacity: 0;
+}
+
+.session-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.session-empty {
+  color: #c0c4cc;
+  font-size: 12px;
+  text-align: center;
+  padding: 16px 0;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 4px;
+  border-bottom: 1px solid #f0f2f5;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.session-item:hover {
+  background: #f5f7fa;
+}
+
+.session-item:last-child {
+  border-bottom: none;
+}
+
+.session-active {
+  background: #ecf5ff;
+}
+
+.session-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-title {
+  font-size: 13px;
+  color: #303133;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-meta {
+  font-size: 11px;
+  color: #909399;
+  margin-top: 2px;
+}
+
+.session-del {
+  flex-shrink: 0;
+  font-size: 16px;
+  width: 24px;
+  height: 24px;
 }
 </style>

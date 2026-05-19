@@ -3,57 +3,158 @@
 因果图 4 级结构: symptom → subsystem → root_cause → trigger_rule
 每条专家规则标注 symptom_tag / subsystem_tag / root_cause_tag，
 对应因果图中同一名称的节点，形成完整的诊断推理链。
+
+基于 9FA 燃气轮机典型故障模式：
+- 热耗率偏高 / 振动超限 / 排气温度分散度偏大 / 润滑油系统异常
+- 功率输出异常 / 压气机喘振风险
 """
 
 # ---- 因果图 (4 级) ----
 
 CAUSAL_GRAPH = {
     "nodes": [
-        # Level 1: 征兆 (symptom)
+        # ── Level 1: 征兆 (symptom) ──
         {"id": "n1", "name": "热耗率偏高", "type": "symptom"},
         {"id": "n9", "name": "振动超限", "type": "symptom"},
-        # Level 2: 子系统 (subsystem)
+        {"id": "n14", "name": "排气温度分散度偏大", "type": "symptom"},
+        {"id": "n15", "name": "润滑油系统异常", "type": "symptom"},
+        {"id": "n16", "name": "功率输出异常", "type": "symptom"},
+        {"id": "n17", "name": "压气机喘振风险", "type": "symptom"},
+
+        # ── Level 2: 子系统 (subsystem) ──
         {"id": "n2", "name": "压气机效率下降", "type": "subsystem"},
         {"id": "n3", "name": "燃烧效率下降", "type": "subsystem"},
         {"id": "n4", "name": "透平效率下降", "type": "subsystem"},
         {"id": "n10", "name": "余热锅炉效率下降", "type": "subsystem"},
         {"id": "n11", "name": "转子系统异常", "type": "subsystem"},
-        # Level 3: 根因 (root_cause)
+        {"id": "n18", "name": "燃烧均匀性异常", "type": "subsystem"},
+        {"id": "n19", "name": "润滑油路故障", "type": "subsystem"},
+        {"id": "n20", "name": "轴承系统异常", "type": "subsystem"},
+        {"id": "n21", "name": "燃料供给异常", "type": "subsystem"},
+        {"id": "n22", "name": "压气机气动失稳", "type": "subsystem"},
+        {"id": "n23", "name": "热通道部件劣化", "type": "subsystem"},
+
+        # ── Level 3: 根因 (root_cause) ──
         {"id": "n5", "name": "叶片积垢", "type": "root_cause"},
         {"id": "n6", "name": "入口滤网堵塞", "type": "root_cause"},
         {"id": "n7", "name": "喷嘴堵塞", "type": "root_cause"},
         {"id": "n8", "name": "叶片磨损", "type": "root_cause"},
         {"id": "n12", "name": "管束积灰结垢", "type": "root_cause"},
         {"id": "n13", "name": "转子不平衡/不对中", "type": "root_cause"},
-        # Level 4: 触发规则 (trigger_rule)
+        {"id": "n24", "name": "燃料喷嘴劣化", "type": "root_cause"},
+        {"id": "n25", "name": "燃烧器内衬裂纹", "type": "root_cause"},
+        {"id": "n26", "name": "冷油器失效", "type": "root_cause"},
+        {"id": "n27", "name": "油滤堵塞", "type": "root_cause"},
+        {"id": "n28", "name": "润滑不良", "type": "root_cause"},
+        {"id": "n29", "name": "轴承合金磨损", "type": "root_cause"},
+        {"id": "n30", "name": "燃气压力不稳", "type": "root_cause"},
+        {"id": "n31", "name": "调节阀卡涩", "type": "root_cause"},
+        {"id": "n32", "name": "IGV执行机构故障", "type": "root_cause"},
+        {"id": "n33", "name": "进气畸变", "type": "root_cause"},
+        {"id": "n34", "name": "热通道涂层剥落", "type": "root_cause"},
+        {"id": "n35", "name": "叶片蠕变/疲劳", "type": "root_cause"},
+        {"id": "n36", "name": "叶片疲劳裂纹", "type": "root_cause"},
+
+        # ── Level 4: 触发规则 (trigger_rule) ──
         {"id": "tr1", "name": "压气机效率劣化诊断", "type": "trigger_rule"},
         {"id": "tr2", "name": "滤网压差异常诊断", "type": "trigger_rule"},
         {"id": "tr3", "name": "排放超标预警", "type": "trigger_rule"},
         {"id": "tr4", "name": "排气温度超限预警", "type": "trigger_rule"},
         {"id": "tr5", "name": "余热锅炉效率下降诊断", "type": "trigger_rule"},
         {"id": "tr6", "name": "振动超限紧急预警", "type": "trigger_rule"},
+        {"id": "tr7", "name": "排气温度分散度超限诊断", "type": "trigger_rule"},
+        {"id": "tr8", "name": "润滑油温超限预警", "type": "trigger_rule"},
+        {"id": "tr9", "name": "润滑油压低预警", "type": "trigger_rule"},
+        {"id": "tr10", "name": "轴承温度超限预警", "type": "trigger_rule"},
+        {"id": "tr11", "name": "功率波动预警", "type": "trigger_rule"},
+        {"id": "tr12", "name": "燃气压力异常预警", "type": "trigger_rule"},
+        {"id": "tr13", "name": "压气机喘振预警", "type": "trigger_rule"},
+        {"id": "tr14", "name": "热通道劣化趋势预警", "type": "trigger_rule"},
     ],
     "edges": [
-        # symptom → subsystem
-        {"source": "n1", "target": "n2", "weight": 0.35},
-        {"source": "n1", "target": "n3", "weight": 0.25},
-        {"source": "n1", "target": "n4", "weight": 0.25},
+        # ── symptom → subsystem ──
+        # 热耗率偏高 → 5 个子系统
+        {"source": "n1", "target": "n2", "weight": 0.30},
+        {"source": "n1", "target": "n3", "weight": 0.20},
+        {"source": "n1", "target": "n4", "weight": 0.20},
         {"source": "n1", "target": "n10", "weight": 0.15},
-        {"source": "n9", "target": "n11", "weight": 0.9},
-        # subsystem → root_cause
-        {"source": "n2", "target": "n5", "weight": 0.6},
-        {"source": "n2", "target": "n6", "weight": 0.4},
-        {"source": "n3", "target": "n7", "weight": 0.8},
-        {"source": "n4", "target": "n8", "weight": 0.8},
-        {"source": "n10", "target": "n12", "weight": 0.9},
-        {"source": "n11", "target": "n13", "weight": 0.9},
-        # root_cause → trigger_rule
+        {"source": "n1", "target": "n23", "weight": 0.15},
+        # 振动超限 → 3 个子系统
+        {"source": "n9", "target": "n11", "weight": 0.45},
+        {"source": "n9", "target": "n20", "weight": 0.35},
+        {"source": "n9", "target": "n22", "weight": 0.20},
+        # 排气温度分散度偏大 → 2 个子系统
+        {"source": "n14", "target": "n18", "weight": 0.65},
+        {"source": "n14", "target": "n3", "weight": 0.35},
+        # 润滑油系统异常 → 2 个子系统
+        {"source": "n15", "target": "n19", "weight": 0.60},
+        {"source": "n15", "target": "n20", "weight": 0.40},
+        # 功率输出异常 → 2 个子系统
+        {"source": "n16", "target": "n21", "weight": 0.55},
+        {"source": "n16", "target": "n4", "weight": 0.45},
+        # 压气机喘振风险 → 2 个子系统
+        {"source": "n17", "target": "n22", "weight": 0.70},
+        {"source": "n17", "target": "n2", "weight": 0.30},
+
+        # ── subsystem → root_cause ──
+        # 压气机效率下降
+        {"source": "n2", "target": "n5", "weight": 0.50},
+        {"source": "n2", "target": "n6", "weight": 0.35},
+        {"source": "n2", "target": "n33", "weight": 0.15},
+        # 燃烧效率下降
+        {"source": "n3", "target": "n7", "weight": 0.70},
+        {"source": "n3", "target": "n24", "weight": 0.30},
+        # 透平效率下降
+        {"source": "n4", "target": "n8", "weight": 0.50},
+        {"source": "n4", "target": "n34", "weight": 0.30},
+        {"source": "n4", "target": "n35", "weight": 0.20},
+        # 余热锅炉效率下降
+        {"source": "n10", "target": "n12", "weight": 0.90},
+        # 转子系统异常
+        {"source": "n11", "target": "n13", "weight": 0.55},
+        {"source": "n11", "target": "n36", "weight": 0.45},
+        # 燃烧均匀性异常
+        {"source": "n18", "target": "n24", "weight": 0.50},
+        {"source": "n18", "target": "n25", "weight": 0.35},
+        {"source": "n18", "target": "n7", "weight": 0.15},
+        # 润滑油路故障
+        {"source": "n19", "target": "n26", "weight": 0.50},
+        {"source": "n19", "target": "n27", "weight": 0.50},
+        # 轴承系统异常
+        {"source": "n20", "target": "n28", "weight": 0.45},
+        {"source": "n20", "target": "n29", "weight": 0.55},
+        # 燃料供给异常
+        {"source": "n21", "target": "n30", "weight": 0.60},
+        {"source": "n21", "target": "n31", "weight": 0.40},
+        # 压气机气动失稳
+        {"source": "n22", "target": "n32", "weight": 0.50},
+        {"source": "n22", "target": "n33", "weight": 0.35},
+        {"source": "n22", "target": "n5", "weight": 0.15},
+        # 热通道部件劣化
+        {"source": "n23", "target": "n34", "weight": 0.50},
+        {"source": "n23", "target": "n35", "weight": 0.35},
+        {"source": "n23", "target": "n8", "weight": 0.15},
+
+        # ── root_cause → trigger_rule ──
         {"source": "n5", "target": "tr1", "weight": 0.8},
         {"source": "n6", "target": "tr2", "weight": 0.8},
         {"source": "n7", "target": "tr3", "weight": 0.8},
         {"source": "n8", "target": "tr4", "weight": 0.8},
         {"source": "n12", "target": "tr5", "weight": 0.8},
         {"source": "n13", "target": "tr6", "weight": 0.8},
+        {"source": "n24", "target": "tr7", "weight": 0.8},
+        {"source": "n25", "target": "tr7", "weight": 0.7},
+        {"source": "n26", "target": "tr8", "weight": 0.8},
+        {"source": "n27", "target": "tr9", "weight": 0.8},
+        {"source": "n28", "target": "tr10", "weight": 0.8},
+        {"source": "n29", "target": "tr10", "weight": 0.8},
+        {"source": "n30", "target": "tr12", "weight": 0.8},
+        {"source": "n31", "target": "tr11", "weight": 0.8},
+        {"source": "n32", "target": "tr13", "weight": 0.8},
+        {"source": "n33", "target": "tr13", "weight": 0.7},
+        {"source": "n34", "target": "tr14", "weight": 0.8},
+        {"source": "n35", "target": "tr14", "weight": 0.8},
+        {"source": "n36", "target": "tr6", "weight": 0.7},
     ],
 }
 
@@ -177,5 +278,150 @@ EXPERT_RULES = [
         "subsystem_tag": "压气机效率下降",
         "root_cause_tag": "入口滤网堵塞",
         "trigger_rule_id": "tr2",
+    },
+    # ── 新增规则：排气温度分散度 ──
+    {
+        "id": "R008",
+        "name": "排气温度分散度超限规则",
+        "condition": "排气温度分散度 > 25°C（TTDM 超限）",
+        "conclusion": "燃烧均匀性异常，燃料喷嘴堵塞或燃烧器内衬裂纹导致局部温度偏差",
+        "confidence": 0.87,
+        "severity": "高",
+        "related_params": ["排气温度分散度", "透平出口温度_T4", "天然气瞬时流量", "排烟含氧量", "CO排放"],
+        "recommended_actions": "1. 检查排气温度热电偶是否正常（排除测量故障）\n2. 分析分散度分布模式（单点偏高/多相邻点偏高）\n3. 若单点偏高 → 可能对应燃烧器燃料喷嘴堵塞\n4. 若多相邻点偏高 → 可能燃烧器内衬裂纹或过渡段损坏\n5. 分散度 > 40°C 需降负荷并安排燃烧系统检查",
+        "check_params": [{"param": "排气温度分散度", "op": ">", "value": 25}],
+        "logic": "all",
+        "symptom_tag": "排气温度分散度偏大",
+        "subsystem_tag": "燃烧均匀性异常",
+        "root_cause_tag": "燃料喷嘴劣化",
+        "trigger_rule_id": "tr7",
+    },
+    # ── 新增规则：润滑油温 ──
+    {
+        "id": "R009",
+        "name": "润滑油温超限规则",
+        "condition": "润滑油供油温度 > 55°C",
+        "conclusion": "润滑油系统散热能力不足，可能原因：冷油器冷却水不足/冷却管堵塞、油温调节阀失灵",
+        "confidence": 0.83,
+        "severity": "中",
+        "related_params": ["润滑油供油温度", "润滑油供油压力", "轴承温度_推力轴承", "轴承温度_支撑轴承"],
+        "recommended_actions": "1. 检查冷油器冷却水流量和温度\n2. 检查油温调节阀 VTR-1 动作是否正常\n3. 检查油冷器管束是否结垢堵塞\n4. 油温 > 60°C 需降负荷运行\n5. 夏季高温期间应提前确认冷却系统容量",
+        "check_params": [{"param": "润滑油供油温度", "op": ">", "value": 55}],
+        "logic": "all",
+        "symptom_tag": "润滑油系统异常",
+        "subsystem_tag": "润滑油路故障",
+        "root_cause_tag": "冷油器失效",
+        "trigger_rule_id": "tr8",
+    },
+    # ── 新增规则：润滑油压 ──
+    {
+        "id": "R010",
+        "name": "润滑油压低规则",
+        "condition": "润滑油供油压力 < 0.20 MPa",
+        "conclusion": "润滑油滤网堵塞或油泵异常，油压不足将导致轴承润滑不良",
+        "confidence": 0.85,
+        "severity": "高",
+        "related_params": ["润滑油供油压力", "润滑油供油温度", "轴承温度_推力轴承", "轴承温度_支撑轴承"],
+        "recommended_actions": "1. 检查润滑油滤网压差指示\n2. 切换至备用滤网并清洗堵塞滤芯\n3. 检查主润滑油泵出口压力\n4. 油压 < 0.15 MPa 触发紧急停机保护\n5. 检查油箱油位是否正常",
+        "check_params": [{"param": "润滑油供油压力", "op": "<", "value": 0.20}],
+        "logic": "all",
+        "symptom_tag": "润滑油系统异常",
+        "subsystem_tag": "润滑油路故障",
+        "root_cause_tag": "油滤堵塞",
+        "trigger_rule_id": "tr9",
+    },
+    # ── 新增规则：轴承温度 ──
+    {
+        "id": "R011",
+        "name": "轴承温度超限规则",
+        "condition": "推力轴承温度 > 100°C 或 支撑轴承温度 > 90°C",
+        "conclusion": "轴承异常磨损或润滑不良，可能导致轴瓦烧损",
+        "confidence": 0.88,
+        "severity": "高",
+        "related_params": ["轴承温度_推力轴承", "轴承温度_支撑轴承", "润滑油供油温度", "润滑油供油压力", "振动_轴向"],
+        "recommended_actions": "1. 推力轴承 > 110°C / 支撑轴承 > 100°C 触发停机保护\n2. 检查润滑油供油温度和压力是否正常\n3. 检查轴承回油温度，判断是否油量不足\n4. 结合振动数据分析，判断是否轴承合金磨损\n5. 安排轴瓦检查（必要时翻瓦检查巴氏合金面）",
+        "check_params": [
+            {"param": "轴承温度_推力轴承", "op": ">", "value": 100},
+            {"param": "轴承温度_支撑轴承", "op": ">", "value": 90},
+        ],
+        "logic": "any",
+        "symptom_tag": "振动超限",
+        "subsystem_tag": "轴承系统异常",
+        "root_cause_tag": "润滑不良",
+        "trigger_rule_id": "tr10",
+    },
+    # ── 新增规则：功率波动 ──
+    {
+        "id": "R012",
+        "name": "功率输出波动规则",
+        "condition": "发电机有功功率 < 170 MW（明显偏离额定负荷）",
+        "conclusion": "燃料供给异常或调节系统卡涩，导致机组出力不足",
+        "confidence": 0.80,
+        "severity": "中",
+        "related_params": ["发电机有功功率", "天然气瞬时流量", "燃气压力", "透平出口温度_T4", "压气机出口压力_P2"],
+        "recommended_actions": "1. 检查燃气压力是否稳定（正常 > 2.0 MPa）\n2. 检查天然气流量调节阀开度与指令是否一致\n3. 对比燃料热值是否异常偏低\n4. 检查压气机出口压力是否正常（排除压气机侧问题）\n5. 检查 MARK VI 控制系统燃料行程基准 FSR 是否异常",
+        "check_params": [{"param": "发电机有功功率", "op": "<", "value": 170}],
+        "logic": "all",
+        "symptom_tag": "功率输出异常",
+        "subsystem_tag": "燃料供给异常",
+        "root_cause_tag": "燃气压力不稳",
+        "trigger_rule_id": "tr11",
+    },
+    # ── 新增规则：燃气压力异常 ──
+    {
+        "id": "R013",
+        "name": "燃气压力异常规则",
+        "condition": "燃气压力 < 2.0 MPa（燃料供给压力不足）",
+        "conclusion": "燃料调节阀卡涩或上游供气压力不稳，影响燃烧稳定性",
+        "confidence": 0.82,
+        "severity": "中",
+        "related_params": ["燃气压力", "天然气瞬时流量", "发电机有功功率", "透平出口温度_T4"],
+        "recommended_actions": "1. 联系上游供气站确认供气压力\n2. 检查燃料调节阀是否卡涩（对比指令开度与实际开度）\n3. 检查燃料过滤器压差\n4. 压力恢复后观察负荷能否正常带到满出力\n5. 若调节阀卡涩，安排检修时更换阀芯",
+        "check_params": [{"param": "燃气压力", "op": "<", "value": 2.0}],
+        "logic": "all",
+        "symptom_tag": "功率输出异常",
+        "subsystem_tag": "燃料供给异常",
+        "root_cause_tag": "调节阀卡涩",
+        "trigger_rule_id": "tr12",
+    },
+    # ── 新增规则：压气机喘振 ──
+    {
+        "id": "R014",
+        "name": "压气机喘振预警规则",
+        "condition": "压气机出口压力 P2 > 1.85 MPa 且 空气流量 < 520 kg/s",
+        "conclusion": "压气机工作点接近喘振边界，IGV执行机构故障或进气畸变导致气动失稳",
+        "confidence": 0.78,
+        "severity": "高",
+        "related_params": ["压气机出口压力_P2", "空气流量", "压气机进口温度_T1", "压气机出口温度_T2", "振动_轴向"],
+        "recommended_actions": "1. 立即降负荷，远离喘振区域\n2. 检查 IGV（可转导叶）开度是否与指令一致\n3. 检查进气滤网是否堵塞导致进气畸变\n4. 监测压气机出口温度是否异常升高\n5. 喘振发生时伴随异常噪音，操作人员应做好紧急停机准备",
+        "check_params": [
+            {"param": "压气机出口压力_P2", "op": ">", "value": 1.85},
+            {"param": "空气流量", "op": "<", "value": 520},
+        ],
+        "logic": "all",
+        "symptom_tag": "压气机喘振风险",
+        "subsystem_tag": "压气机气动失稳",
+        "root_cause_tag": "IGV执行机构故障",
+        "trigger_rule_id": "tr13",
+    },
+    # ── 新增规则：热通道劣化 ──
+    {
+        "id": "R015",
+        "name": "热通道劣化趋势规则",
+        "condition": "透平效率 < 88% 且 排气温度分散度 > 20°C",
+        "conclusion": "热通道部件（叶片/喷嘴环）涂层剥落或蠕变变形，性能持续劣化",
+        "confidence": 0.82,
+        "severity": "中",
+        "related_params": ["透平出口温度_T4", "排气温度分散度", "透平进口温度_T3", "透平出口压力_P4", "发电机有功功率"],
+        "recommended_actions": "1. 对比历次检修记录中叶片涂层检查结果\n2. 分析透平效率下降趋势，评估剩余运行小时数\n3. 若下降速率加快，考虑提前安排热通道检修（HCMI）\n4. 检查排气温度分散度变化是否与叶片损伤相关\n5. 制定检修计划时重点安排叶片孔探检查",
+        "check_params": [
+            {"param": "__indicator__透平效率", "op": "<", "value": 88},
+            {"param": "排气温度分散度", "op": ">", "value": 20},
+        ],
+        "logic": "all",
+        "symptom_tag": "热耗率偏高",
+        "subsystem_tag": "热通道部件劣化",
+        "root_cause_tag": "热通道涂层剥落",
+        "trigger_rule_id": "tr14",
     },
 ]

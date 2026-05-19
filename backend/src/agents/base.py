@@ -129,8 +129,8 @@ class BaseAgent:
                     continue
 
                 result_str = str(result)
-                truncated = len(result_str) > 2000
-                result_text = result_str[:2000] + "\n...[数据已截断]" if truncated else result_str
+                truncated = len(result_str) > 10000
+                result_text = result_str[:10000] + "\n...[数据已截断]" if truncated else result_str
 
                 tool_results.append({
                     "tool": tool_name,

@@ -204,10 +204,12 @@ export interface ChatMessage {
   content: string
   citations?: ChatCitation[]
   debug_logs?: DebugLogEntry[]
+  timestamp?: string
 }
 
 export interface ChatRequest {
   message: string
+  session_id?: string
 }
 
 export interface ChatResponse {
@@ -215,6 +217,20 @@ export interface ChatResponse {
   citations: ChatCitation[]
   tool_results: ToolResult[]
   debug_logs: DebugLogEntry[]
+}
+
+// ---- Chat Sessions ----
+
+export interface ChatSession {
+  id: string
+  title: string
+  created: string
+  updated: string
+  message_count: number
+}
+
+export interface ChatSessionDetail extends ChatSession {
+  messages: ChatMessage[]
 }
 
 export interface ToolResult {

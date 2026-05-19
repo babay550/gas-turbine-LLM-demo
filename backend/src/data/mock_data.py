@@ -50,6 +50,15 @@ def generate_realtime_data() -> dict:
     hrh_steam_temp = round(random.uniform(480, 530), 1)  # HRB 蒸汽温度 °C
     hrh_steam_press = round(random.uniform(3.0, 4.5), 2) # HRB 蒸汽压力 MPa
 
+    # --- 润滑油系统 ---
+    lube_oil_temp = round(random.uniform(42, 55), 1)     # 润滑油供油温度 °C
+    lube_oil_press = round(random.uniform(0.25, 0.42), 3) # 润滑油供油压力 MPa
+    bearing_thrust_temp = round(random.uniform(72, 98), 1)  # 推力轴承温度 °C
+    bearing_journal_temp = round(random.uniform(68, 88), 1)  # 支撑轴承温度 °C
+
+    # --- 排气温度分散度 ---
+    exhaust_spread = round(random.uniform(8, 28), 1)     # 排气温度分散度 °C (TTDM)
+
     return {
         "timestamp": now.isoformat(),
         "unit_id": "GT-01",
@@ -90,10 +99,18 @@ def generate_realtime_data() -> dict:
             # 其他
             "振动_轴向": round(random.uniform(2.0, 6.0), 2),
             "振动_垂向": round(random.uniform(2.0, 5.5), 2),
+            # 润滑油系统
+            "润滑油供油温度": lube_oil_temp,
+            "润滑油供油压力": lube_oil_press,
+            "轴承温度_推力轴承": bearing_thrust_temp,
+            "轴承温度_支撑轴承": bearing_journal_temp,
+            # 排气温度分散度
+            "排气温度分散度": exhaust_spread,
         },
         "status": "正常运行" if random.random() > 0.15 else "注意",
         "warnings": random.sample(
-            ["排气温度偏高", "振动值上升趋势", "压气机效率下降", "热耗率偏高"],
+            ["排气温度偏高", "振动值上升趋势", "压气机效率下降", "热耗率偏高",
+             "排气温度分散度偏大", "润滑油温偏高", "轴承温度偏高", "燃气压力波动"],
             k=random.randint(0, 2),
         ),
     }

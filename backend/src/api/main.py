@@ -1,4 +1,4 @@
-"""FastAPI 主应用 — 提供所有 REST API 和 WebSocket 接口。"""
+"""FastAPI 主应用 — 提供所有 REST API 和 WebSocket 接口。v1.6"""
 
 import sys
 import os
@@ -16,7 +16,7 @@ from src.core.scheduler import Scheduler
 from src.core.trigger_engine import TriggerEngine
 from src.knowledge.wiki_manager import WikiManager
 
-from src.api.routes import monitoring, analysis, chat, schedule, warning, dictionary, knowledge, workflow
+from src.api.routes import monitoring, analysis, chat, chat_sessions, schedule, warning, dictionary, knowledge, workflow
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +111,7 @@ app.add_middleware(
 app.include_router(monitoring.router, prefix="/api/monitoring", tags=["能效监测"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["分析诊断"])
 app.include_router(chat.router, prefix="/api/chat", tags=["智能对话"])
+app.include_router(chat_sessions.router, prefix="/api/chat", tags=["智能对话"])
 app.include_router(schedule.router, prefix="/api/schedule", tags=["调度管理"])
 app.include_router(warning.router, prefix="/api/warning", tags=["预警管理"])
 app.include_router(dictionary.router, prefix="/api/dictionary", tags=["数据字典"])

@@ -808,7 +808,7 @@ onMounted(async () => { await loadModels() })
           <div v-for="c in wikiQACitations" :key="c.entry_id" class="citation-item">
             <el-tag :type="wikiTypeTag(c.type)" size="small">{{ wikiTypeLabels[c.type] || c.type }}</el-tag>
             <span class="citation-title" @click="viewWikiEntry({ id: c.entry_id } as any)">{{ c.entry_id }}: {{ c.title }}</span>
-            <span class="citation-score">相关度: {{ c.relevance_score }}</span>
+            <span v-if="c.relevance_score" class="citation-score">相关度: {{ c.relevance_score }}</span>
           </div>
         </div>
       </div>
