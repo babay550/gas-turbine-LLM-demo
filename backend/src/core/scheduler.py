@@ -23,13 +23,21 @@ class Scheduler:
             agent = next(iter(self._agents.values()))
             return {"agent": agent.name, **agent.run(query)}
 
-        # TODO: 多 Agent 路由逻辑
-        # 关键词匹配：运维相关 → maintenance_agent，优化相关 → optimization_agent
-        optimization_keywords = ["能效", "效率", "耗差", "对标", "优化", "热耗", "厂用电", "负荷"]
-        if any(kw in query for kw in optimization_keywords):
-            agent = self._agents.get("optimization_agent")
+        # 路由关键词集合（按优先级）
+        root_keywords = ["原因", "为什么", "故障", "异常", "诊断", "根因", "排查"]
+        analysis_keywords = ["能效", "效率", "耗差", "对标", "优化", "热耗", "厂用电", "负荷", "损失", "趋势"]
+        wiki_keywords = ["规程", "检修", "操作规范", "设备参数", "技术标准", "手册", "处理方案"]
+
+        q = query.lower()
+
+        if any(kw in q for kw in root_keywords):
+            agent = self._agents.get("root_cause_agent")
+        elif any(kw in q for kw in analysis_keywords):
+            agent = self._agents.get("analysis_agent")
+        elif any(kw in q for kw in wiki_keywords):
+            agent = self._agents.get("wiki_agent")
         else:
-            agent = next(iter(self._agents.values()))
+            agent = self._agents.get("chat_agent") or next(iter(self._agents.values()))
 
         if agent is None:
             return {"error": "无可用的 Agent"}
