@@ -1,14 +1,7 @@
 """运营优化 Agent — 封装能效分析、耗差分析、对标分析、实时监测、预警查询、知识库检索、根因诊断能力。"""
 
 from src.agents.base import BaseAgent
-from src.tools.efficiency_tool import efficiency_analysis
-from src.tools.loss_analysis_tool import loss_analysis
-from src.tools.benchmark_tool import benchmark_analysis
-from src.tools.realtime_tool import realtime_monitoring
-from src.tools.warning_tool import warning_query
-from src.tools.trend_tool import efficiency_trend
-from src.tools.wiki_search_tool import wiki_search
-from src.tools.root_cause_tool import root_cause_analysis
+from src.tools import registry as tool_registry
 
 
 class OptimizationAgent(BaseAgent):
@@ -68,13 +61,13 @@ class OptimizationAgent(BaseAgent):
 
     def __init__(self):
         super().__init__()
-        self.register_tools([
-            realtime_monitoring,
-            efficiency_analysis,
-            loss_analysis,
-            benchmark_analysis,
-            efficiency_trend,
-            warning_query,
-            wiki_search,
-            root_cause_analysis,
-        ])
+        self.register_tools(tool_registry.get_tools([
+            "realtime_monitoring",
+            "efficiency_analysis",
+            "loss_analysis",
+            "benchmark_analysis",
+            "efficiency_trend",
+            "warning_query",
+            "wiki_search",
+            "root_cause_analysis",
+        ]))
