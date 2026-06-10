@@ -123,8 +123,8 @@ async def lifespan(app: FastAPI):
     skill_registry = SkillRegistry(skills_root)
     skill_registry.load_all()
     skill_executor = SkillExecutor(skill_registry, wiki_manager)
-    # 将 Skills 注册为 agent tools（注册到所有 agent，便于跨 Agent 使用）
-    for _agent in [root_agent, analysis_agent, wiki_agent, chat_agent]:
+    # 将 Skills 注册为 agent tools（仅注册到分析与根因 Agent，避免覆盖纯知识检索 Agent）
+    for _agent in [root_agent, analysis_agent]:
         register_skills_with_agent(_agent, skill_registry, skill_executor)
     # 注入工作流引擎
     from src.core.workflow_engine import set_skill_executor
