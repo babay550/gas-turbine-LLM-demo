@@ -29,6 +29,8 @@ import type {
   MaintenanceListResponse,
   ExpertRuleListResponse,
   VectorKBSourceListResponse,
+  VectorRetrieveResponse,
+  VectorQAResponse,
   CausalGraph,
   WikiEntryListResponse,
   WikiEntry,
@@ -41,6 +43,27 @@ import type {
   NodeTypeDef,
   ExecutionResult,
   RootCauseAnalysisResult,
+  SkillDefinition,
+  SkillCreateRequest,
+  SkillExecuteResult,
+  SkillTypeOption,
+  SkillFileInfo,
+  SkillFileContent,
+  ImportPreview,
+  ImportColumnMapping,
+  ImportJob,
+  TimeRangeInfo,
+  TimeSeriesQueryResponse,
+  ParameterStat,
+  ParameterTrendResponse,
+  LoginRequest,
+  LoginResponse,
+  UserInfo,
+  UserListResponse,
+  UserCreateRequest,
+  Organization,
+  OrganizationTreeResponse,
+  ChangePasswordRequest,
 } from '../types'
 
 const http = axios.create({
@@ -48,6 +71,31 @@ const http = axios.create({
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 })
+
+// ---- 认证拦截器 ----
+
+// 请求拦截器：注入 JWT token
+http.interceptors.request.use((config) => {
+  const token = localStorage.getItem('gas_turbine_token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+// 响应拦截器：处理 401 → 跳转登录
+http.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('gas_turbine_token')
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+    }
+    return Promise.reject(error)
+  }
+)
 
 // ---- Monitoring ----
 
@@ -70,8 +118,8 @@ export async function runEfficiencyAnalysis(): Promise<AnalysisResponse<Efficien
   return res.data
 }
 
-export async function runLossAnalysis(): Promise<AnalysisResponse<LossAnalysisResult>> {
-  const res = await http.post<AnalysisResponse<LossAnalysisResult>>('/analysis/loss')
+export async function runLossAnalysis(aggregation: string = 'raw'): Promise<AnalysisResponse<LossAnalysisResult>> {
+  const res = await http.post<AnalysisResponse<LossAnalysisResult>>('/analysis/loss', { aggregation })
   return res.data
 }
 
@@ -85,6 +133,21 @@ export async function runDecomposition(): Promise<DecompositionResult> {
   return res.data
 }
 
+export async function runPeriodLossAnalysis(params: {
+  parameter_keys: string[]
+  start: string
+  end: string
+  unit_id?: string
+}): Promise<AnalysisResponse<LossAnalysisResult>> {
+  const res = await http.post<AnalysisResponse<LossAnalysisResult>>('/analysis/period-loss', {
+    parameter_keys: params.parameter_keys,
+    start: params.start,
+    end: params.end,
+    unit_id: params.unit_id || 'GT-01',
+  })
+  return res.data
+}
+
 export async function runRootCause(query?: string): Promise<RootCauseAnalysisResult> {
   const res = await http.post<RootCauseAnalysisResult>('/analysis/root-cause', query ? { query } : undefined)
   return res.data
@@ -92,8 +155,7 @@ export async function runRootCause(query?: string): Promise<RootCauseAnalysisRes
 
 // ---- Chat ----
 
-export async function sendMessage(payload: ChatRequest): Promise<ChatResponse> {
-  // Agent 需要多轮 LLM 调用（意图识别→工具执行→总结），给足够时间
+export async function sendMessage(payload: ChatRequest & { skill_hint?: string }): Promise<ChatResponse> {
   const res = await http.post<ChatResponse>('/chat/message', payload, { timeout: 180000 })
   return res.data
 }
@@ -174,6 +236,29 @@ export async function getParameters(): Promise<ParameterListResponse> {
   return res.data
 }
 
+export async function getImportTimeFormats(): Promise<{ presets: { key: string; format: string; example: string }[] }> {
+  const res = await http.get('/data-import/time-formats')
+  return res.data
+}
+
+export async function createParameter(data: {
+  name: string; unit: string; subsystem?: string; location?: string;
+  normal_min?: number; normal_max?: number; source?: string; update_freq?: string;
+}): Promise<{ success: boolean; id: string; message: string }> {
+  const res = await http.post('/dictionary/parameters', data)
+  return res.data
+}
+
+export async function updateParameter(id: string, data: Record<string, unknown>): Promise<{ success: boolean }> {
+  const res = await http.put(`/dictionary/parameters/${encodeURIComponent(id)}`, data)
+  return res.data
+}
+
+export async function deleteParameter(id: string): Promise<{ success: boolean }> {
+  const res = await http.delete(`/dictionary/parameters/${encodeURIComponent(id)}`)
+  return res.data
+}
+
 export async function getBaselines(): Promise<BaselineListResponse> {
   const res = await http.get<BaselineListResponse>('/dictionary/baselines')
   return res.data
@@ -181,6 +266,56 @@ export async function getBaselines(): Promise<BaselineListResponse> {
 
 export async function getBenchmarkIndicators(): Promise<BenchmarkIndicatorListResponse> {
   const res = await http.get<BenchmarkIndicatorListResponse>('/dictionary/benchmark-indicators')
+  return res.data
+}
+
+// ---- Loss Variable Config (耗差分析损失项配置) ----
+
+export interface LossVariableItem {
+  id: number
+  param_key: string
+  name: string
+  unit: string
+  baseline: number
+  best: number
+  sort_order: number
+}
+
+export async function getLossVariables(): Promise<{ variables: LossVariableItem[]; total: number }> {
+  const res = await http.get<{ variables: LossVariableItem[]; total: number }>('/dictionary/loss-variables')
+  return res.data
+}
+
+export async function createLossVariable(data: {
+  param_key: string; name: string; unit: string; baseline: number; best: number;
+}): Promise<{ success: boolean; id: number; variable: LossVariableItem }> {
+  const res = await http.post<{ success: boolean; id: number; variable: LossVariableItem }>('/dictionary/loss-variables', data)
+  return res.data
+}
+
+export async function updateLossVariable(id: number, data: {
+  param_key?: string; name?: string; unit?: string; baseline?: number; best?: number; sort_order?: number;
+}): Promise<{ success: boolean; variable: LossVariableItem }> {
+  const res = await http.put<{ success: boolean; variable: LossVariableItem }>(`/dictionary/loss-variables/${id}`, data)
+  return res.data
+}
+
+export async function deleteLossVariable(id: number): Promise<{ success: boolean }> {
+  const res = await http.delete<{ success: boolean }>(`/dictionary/loss-variables/${id}`)
+  return res.data
+}
+
+// ---- Waterfall Config (瀑布图配置) ----
+
+export async function getWaterfallConfig(): Promise<{ total_key: string; subsystem_keys: string[] }> {
+  const res = await http.get<{ total_key: string; subsystem_keys: string[] }>('/dictionary/waterfall-config')
+  return res.data
+}
+
+export async function saveWaterfallConfig(data: {
+  total_key: string; subsystem_keys: string[];
+}): Promise<{ success: boolean }> {
+  const res = await http.put<{ success: boolean }>('/dictionary/waterfall-config', data)
   return res.data
 }
 
@@ -218,13 +353,52 @@ export async function getVectorKBSources(): Promise<VectorKBSourceListResponse> 
   return res.data
 }
 
-export async function addVectorKBSource(payload: { name: string; url: string; embedding_model?: string }): Promise<{ success: boolean; id: string; message: string }> {
+export async function addVectorKBSource(payload: {
+  name: string
+  retrieve_url: string
+  ocr_url?: string
+  minio_url?: string
+  minio_bucket?: string
+  default_final_top_k?: number
+  default_hyde_mode?: boolean
+  default_query_decomposition_mode?: boolean
+}): Promise<{ success: boolean; id: string; message: string }> {
   const res = await http.post('/knowledge/knowledge/vector-sources', payload)
+  return res.data
+}
+
+export async function deleteVectorKBSource(sourceId: string): Promise<{ success: boolean; message: string }> {
+  const res = await http.delete(`/knowledge/knowledge/vector-sources/${encodeURIComponent(sourceId)}`)
   return res.data
 }
 
 export async function testVectorKBConnection(sourceId: string): Promise<ModelTestResult> {
   const res = await http.post<ModelTestResult>(`/knowledge/knowledge/vector-sources/${encodeURIComponent(sourceId)}/test`)
+  return res.data
+}
+
+export async function vectorRetrieve(sourceId: string, params: {
+  query: string
+  tags?: string
+  final_top_k?: number
+  hyde_mode?: boolean
+  query_decomposition_mode?: boolean
+  doc_sources?: string
+}): Promise<VectorRetrieveResponse> {
+  const res = await http.post<VectorRetrieveResponse>(
+    `/knowledge/knowledge/vector-sources/${encodeURIComponent(sourceId)}/retrieve`,
+    params,
+    { timeout: 60000 },
+  )
+  return res.data
+}
+
+export async function vectorQA(sourceId: string, query: string): Promise<VectorQAResponse> {
+  const res = await http.post<VectorQAResponse>(
+    `/knowledge/knowledge/vector-sources/${encodeURIComponent(sourceId)}/qa`,
+    { query },
+    { timeout: 180000 },
+  )
   return res.data
 }
 
@@ -350,6 +524,262 @@ export async function getWorkflowNodeTypes(): Promise<NodeTypeDef[]> {
 export async function executeWorkflow(id: string, userInput: string): Promise<ExecutionResult> {
   const res = await http.post<ExecutionResult>(`/workflow/${encodeURIComponent(id)}/execute`, {
     user_input: userInput,
+  })
+  return res.data
+}
+
+// ---- Skills ----
+
+export async function getSkills(): Promise<SkillDefinition[]> {
+  const res = await http.get<SkillDefinition[]>('/skills/list')
+  return res.data
+}
+
+export async function getSkill(name: string): Promise<SkillDefinition> {
+  const res = await http.get<SkillDefinition>(`/skills/${encodeURIComponent(name)}`)
+  return res.data
+}
+
+export async function getSkillTypes(): Promise<{ types: SkillTypeOption[] }> {
+  const res = await http.get<{ types: SkillTypeOption[] }>('/skills/types')
+  return res.data
+}
+
+export async function createSkill(data: SkillCreateRequest): Promise<{ success: boolean; name: string }> {
+  const res = await http.post<{ success: boolean; name: string }>('/skills', data)
+  return res.data
+}
+
+export async function updateSkill(name: string, data: Partial<SkillDefinition>): Promise<{ success: boolean }> {
+  const res = await http.put<{ success: boolean }>(`/skills/${encodeURIComponent(name)}`, data)
+  return res.data
+}
+
+export async function deleteSkill(name: string): Promise<{ success: boolean }> {
+  const res = await http.delete<{ success: boolean }>(`/skills/${encodeURIComponent(name)}`)
+  return res.data
+}
+
+export async function executeSkill(name: string, args: Record<string, unknown> = {}): Promise<SkillExecuteResult> {
+  const res = await http.post<SkillExecuteResult>(`/skills/${encodeURIComponent(name)}/execute`, { args })
+  return res.data
+}
+
+export async function getSkillReferences(name: string): Promise<{ skill: string; files: string[]; total: number }> {
+  const res = await http.get<{ skill: string; files: string[]; total: number }>(`/skills/${encodeURIComponent(name)}/references`)
+  return res.data
+}
+
+export async function reloadSkills(): Promise<{ success: boolean; count: number }> {
+  const res = await http.post<{ success: boolean; count: number }>('/skills/reload')
+  return res.data
+}
+
+// ---- Skills: ZIP Import/Export ----
+
+export async function importSkillZip(file: File): Promise<{ success: boolean; name: string; type: string; description: string }> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await http.post<{ success: boolean; name: string; type: string; description: string }>(
+    '/skills/import', form,
+    { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60000 },
+  )
+  return res.data
+}
+
+export function exportSkillUrl(name: string): string {
+  return `/api/skills/${encodeURIComponent(name)}/export`
+}
+
+// ---- Skills: File Browser/Editor ----
+
+export async function listSkillFiles(name: string): Promise<{ skill: string; files: SkillFileInfo[]; total: number }> {
+  const res = await http.get<{ skill: string; files: SkillFileInfo[]; total: number }>(`/skills/${encodeURIComponent(name)}/files`)
+  return res.data
+}
+
+export async function readSkillFile(name: string, filePath: string): Promise<SkillFileContent> {
+  const res = await http.get<SkillFileContent>(`/skills/${encodeURIComponent(name)}/files/${encodeURIComponent(filePath)}`)
+  return res.data
+}
+
+export async function writeSkillFile(name: string, filePath: string, content: string): Promise<{ success: boolean; path: string }> {
+  const res = await http.put<{ success: boolean; path: string }>(
+    `/skills/${encodeURIComponent(name)}/files/${encodeURIComponent(filePath)}`,
+    { content },
+  )
+  return res.data
+}
+
+// ---- Data Import ----
+
+export async function uploadDataFile(file: File): Promise<ImportPreview> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await http.post<ImportPreview>('/data-import/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,
+  })
+  return res.data
+}
+
+export async function executeImport(jobId: number, mapping: ImportColumnMapping): Promise<{ job_id: number; status: string; imported_rows?: number; error_message?: string }> {
+  const res = await http.post(`/data-import/${jobId}/execute`, mapping, { timeout: 300000 })
+  return res.data
+}
+
+export async function getImportJobStatus(jobId: number): Promise<ImportJob> {
+  const res = await http.get<ImportJob>(`/data-import/${jobId}/status`)
+  return res.data
+}
+
+export async function getImportJobs(): Promise<{ jobs: ImportJob[]; total: number }> {
+  const res = await http.get<{ jobs: ImportJob[]; total: number }>('/data-import/jobs')
+  return res.data
+}
+
+export async function deleteImportJob(jobId: number): Promise<{ success: boolean; message: string }> {
+  const res = await http.delete(`/data-import/${jobId}`)
+  return res.data
+}
+
+export async function getImportJobPreview(jobId: number): Promise<ImportPreview> {
+  const res = await http.get<ImportPreview>(`/data-import/${jobId}/preview`)
+  return res.data
+}
+
+// ---- Auth ----
+
+export async function login(data: LoginRequest): Promise<LoginResponse> {
+  const res = await http.post<LoginResponse>('/auth/login', data)
+  return res.data
+}
+
+export async function getMe(): Promise<UserInfo> {
+  const res = await http.get<UserInfo>('/auth/me')
+  return res.data
+}
+
+export async function changePassword(data: ChangePasswordRequest): Promise<{ success: boolean; message: string }> {
+  const res = await http.put('/auth/me/password', data)
+  return res.data
+}
+
+// ---- User Management (admin) ----
+
+export async function getUsers(params?: { page?: number; page_size?: number; search?: string; role?: string }): Promise<UserListResponse> {
+  const res = await http.get<UserListResponse>('/users', { params })
+  return res.data
+}
+
+export async function createUser(data: UserCreateRequest): Promise<{ success: boolean; id: number; message: string }> {
+  const res = await http.post('/users', data)
+  return res.data
+}
+
+export async function updateUser(userId: number, data: Record<string, unknown>): Promise<{ success: boolean }> {
+  const res = await http.put(`/users/${userId}`, data)
+  return res.data
+}
+
+export async function deleteUser(userId: number): Promise<{ success: boolean }> {
+  const res = await http.delete(`/users/${userId}`)
+  return res.data
+}
+
+export async function resetUserPassword(userId: number, newPassword: string): Promise<{ success: boolean }> {
+  const res = await http.put(`/users/${userId}/password`, { new_password: newPassword })
+  return res.data
+}
+
+export async function updateUserRole(userId: number, role: string): Promise<{ success: boolean }> {
+  const res = await http.put(`/users/${userId}/role`, { role })
+  return res.data
+}
+
+// ---- Organization Management (admin) ----
+
+export async function getOrgTree(): Promise<OrganizationTreeResponse> {
+  const res = await http.get<OrganizationTreeResponse>('/organizations')
+  return res.data
+}
+
+export async function getOrgFlat(): Promise<{ organizations: Organization[] }> {
+  const res = await http.get('/organizations/flat')
+  return res.data
+}
+
+export async function createOrg(data: { name: string; parent_id?: number | null; code?: string; description?: string }): Promise<{ success: boolean; id: number }> {
+  const res = await http.post('/organizations', data)
+  return res.data
+}
+
+export async function updateOrg(orgId: number, data: Record<string, unknown>): Promise<{ success: boolean }> {
+  const res = await http.put(`/organizations/${orgId}`, data)
+  return res.data
+}
+
+export async function deleteOrg(orgId: number): Promise<{ success: boolean }> {
+  const res = await http.delete(`/organizations/${orgId}`)
+  return res.data
+}
+
+// ---- Historical Data ----
+
+export async function getTimeRange(unitId = 'GT-01'): Promise<TimeRangeInfo> {
+  const res = await http.get<TimeRangeInfo>('/historical/range', { params: { unit_id: unitId } })
+  return res.data
+}
+
+export async function queryTimeSeries(params: {
+  parameter_keys: string[]
+  start: string
+  end: string
+  unit_id?: string
+  aggregation?: string
+}): Promise<TimeSeriesQueryResponse> {
+  const res = await http.get<TimeSeriesQueryResponse>('/historical/query', {
+    params: {
+      parameter_keys: params.parameter_keys.join(','),
+      start: params.start,
+      end: params.end,
+      unit_id: params.unit_id || 'GT-01',
+      aggregation: params.aggregation || 'raw',
+    },
+  })
+  return res.data
+}
+
+export async function getParameterStats(params: {
+  parameter_keys: string[]
+  start: string
+  end: string
+  unit_id?: string
+}): Promise<{ stats: ParameterStat[]; total: number }> {
+  const res = await http.get<{ stats: ParameterStat[]; total: number }>('/historical/stats', {
+    params: {
+      parameter_keys: params.parameter_keys.join(','),
+      start: params.start,
+      end: params.end,
+      unit_id: params.unit_id || 'GT-01',
+    },
+  })
+  return res.data
+}
+
+export async function getParameterTrend(parameterKey: string, params: {
+  start: string
+  end: string
+  unit_id?: string
+  aggregation?: string
+}): Promise<ParameterTrendResponse> {
+  const res = await http.get<ParameterTrendResponse>(`/historical/parameters/${encodeURIComponent(parameterKey)}/trend`, {
+    params: {
+      start: params.start,
+      end: params.end,
+      unit_id: params.unit_id || 'GT-01',
+      aggregation: params.aggregation || 'raw',
+    },
   })
   return res.data
 }

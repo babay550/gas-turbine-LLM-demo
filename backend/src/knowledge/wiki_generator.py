@@ -18,19 +18,20 @@ WIKI_GENERATION_SYSTEM_PROMPT = """你是一个燃气轮机运维知识库管理
 
 ## 维基词条类型
 - content_summary: 文档核心内容的摘要条目（每份文档必须有 1 条）
-- entity: 设备、组件等实体条目（如"压气机叶片"、"DLN燃烧器"、"余热锅炉管束"）
+- entity: 设备、组件等实体条目（如"燃气轮机"、"燃烧室"、"透平机"、"发电机"、"余热锅炉"、"控制系统"、"整机"、"辅助系统"等大型设备或组件，或"压气机叶片"、"DLN燃烧器"、"余热锅炉管束"、"水洗系统"、"冷却系统"等小型零部件或系统）
 - concept: 概念条目，包括参数指标、操作规程、技术方法、报警规则、设计规则等
 - comparative: 对比分析条目（如不同清洗方法对比、不同检测标准对比）
 - overview: 综述性条目，对某一主题的全景概述
 
 ## 要求
-1. 每份文档应生成 10-15 条维基词条
+1. 每份文档最多生成不超过 20 条维基词条
 2. 第一条必须是 content_summary 类型，概括文档核心内容
 3. 每条目需有清晰的标题、分类、标签
 4. 内容用 markdown 格式，包含 ## 标题分节，内容充实专业
 5. 标签要具体，便于后续检索
 6. 从文档中提取所有提到的设备、部件、技术概念作为独立词条
 7. 对于涉及规程/标准的部分，提炼为 concept 类型词条
+8. 对于相同的实体，但是型号不同，产生了新的技术概念，在原有的词条内容上新增，并区别不同型号设备的概念
 
 ## 输出格式
 请输出 JSON 数组，每个元素格式如下（不要输出其他内容，只输出 JSON）：
@@ -104,6 +105,12 @@ class WikiGenerator:
                 "concept_subcategory": entry_data.get("concept_subcategory"),
             }
             content = entry_data.get("content", "")
+            # 追加图片引用段落
+            if parsed.images:
+                img_lines = ["", "## 相关图示", ""]
+                for idx, img_name in enumerate(parsed.images, 1):
+                    img_lines.append(f"![图{idx}](/api/knowledge/assets/{img_name})")
+                content += "\n".join(img_lines)
             entry = self.wiki_manager.create_entry(frontmatter, content)
             created_entries.append(entry.id)
 

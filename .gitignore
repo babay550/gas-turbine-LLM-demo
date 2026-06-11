@@ -24,3 +24,5 @@ frontend/dist/
 Thumbs.db
 
 backend/data/
+backend/knowledge/
+backend/skills/

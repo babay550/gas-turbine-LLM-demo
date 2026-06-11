@@ -6,8 +6,9 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { GraphChart } from 'echarts/charts'
 import { TitleComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import * as api from '../api'
-import type { ModelEntry, ExpertRule, CausalGraph, CausalNode, VectorKBSource, ModelTestResult, WikiEntryMeta, WikiEntry, WikiStatsResponse, RawFileInfo, WikiGraphData } from '../types'
+import type { ModelEntry, ExpertRule, CausalGraph, CausalNode, VectorKBSource, VectorRetrieveChunk, ModelTestResult, WikiEntryMeta, WikiEntry, WikiStatsResponse, RawFileInfo, WikiGraphData } from '../types'
 import { ElMessage } from 'element-plus'
+import { renderMarkdown } from '../utils/markdown'
 
 use([CanvasRenderer, GraphChart, TitleComponent, TooltipComponent, LegendComponent])
 
@@ -91,7 +92,23 @@ const showCausalEdgeDialog = ref(false)
 const causalEdgeForm = reactive({ source: '', target: '', weight: 0.5 })
 
 const showVectorDialog = ref(false)
-const vectorForm = reactive({ name: '', url: '', embedding_model: 'bge-large-zh' })
+const vectorForm = reactive({
+  name: '',
+  retrieve_url: '',
+  ocr_url: '',
+  minio_url: '',
+  minio_bucket: 'mineru',
+  default_final_top_k: 10,
+})
+
+// --- 向量知识库问答状态 ---
+const vectorQAActive = ref(false)
+const vectorQASourceId = ref('')
+const vectorQASourceName = ref('')
+const vectorQAQuery = ref('')
+const vectorQALoading = ref(false)
+const vectorQAMessages = ref<{ role: 'user' | 'assistant'; content: string; chunks?: VectorRetrieveChunk[] }[]>([])
+const vectorQAExpandedChunks = ref<Set<number>>(new Set())
 
 // --- Severity tag colors ---
 function severityType(s?: string) {
@@ -373,14 +390,86 @@ function handleAddCausalEdge() {
 
 async function handleAddVectorSource() {
   try {
-    await api.addVectorKBSource({ name: vectorForm.name, url: vectorForm.url, embedding_model: vectorForm.embedding_model })
+    await api.addVectorKBSource({
+      name: vectorForm.name,
+      retrieve_url: vectorForm.retrieve_url,
+      ocr_url: vectorForm.ocr_url || undefined,
+      minio_url: vectorForm.minio_url || undefined,
+      minio_bucket: vectorForm.minio_bucket || undefined,
+      default_final_top_k: vectorForm.default_final_top_k || undefined,
+    })
     ElMessage.success('向量知识库已接入')
     showVectorDialog.value = false
-    Object.assign(vectorForm, { name: '', url: '', embedding_model: 'bge-large-zh' })
+    Object.assign(vectorForm, { name: '', retrieve_url: '', ocr_url: '', minio_url: '', minio_bucket: 'mineru', default_final_top_k: 10 })
     await loadVectorSources()
   } catch (e: unknown) {
     ElMessage.error(e instanceof Error ? e.message : '添加失败')
   }
+}
+
+// --- 向量知识库问答 ---
+function openVectorQA(source: VectorKBSource) {
+  vectorQAActive.value = true
+  vectorQASourceId.value = source.id
+  vectorQASourceName.value = source.name
+  vectorQAMessages.value = []
+  vectorQAQuery.value = ''
+  vectorQAExpandedChunks.value = new Set()
+}
+
+function closeVectorQA() {
+  vectorQAActive.value = false
+  vectorQASourceId.value = ''
+  vectorQAMessages.value = []
+}
+
+async function handleVectorQA() {
+  const q = vectorQAQuery.value.trim()
+  if (!q || vectorQALoading.value) return
+  vectorQAMessages.value.push({ role: 'user', content: q })
+  vectorQAQuery.value = ''
+  vectorQALoading.value = true
+  try {
+    const result = await api.vectorQA(vectorQASourceId.value, q)
+    vectorQAMessages.value.push({
+      role: 'assistant',
+      content: result.answer,
+      chunks: result.chunks || [],
+    })
+  } catch (e: unknown) {
+    vectorQAMessages.value.push({
+      role: 'assistant',
+      content: '问答失败: ' + (e instanceof Error ? e.message : String(e)),
+    })
+  } finally {
+    vectorQALoading.value = false
+    // 自动滚动到底部
+    setTimeout(() => {
+      const el = document.querySelector('.vector-qa-messages')
+      if (el) el.scrollTop = el.scrollHeight
+    }, 50)
+  }
+}
+
+function toggleChunkExpand(idx: number) {
+  if (vectorQAExpandedChunks.value.has(idx)) {
+    vectorQAExpandedChunks.value.delete(idx)
+  } else {
+    vectorQAExpandedChunks.value.add(idx)
+  }
+}
+
+async function deleteVectorSource(sourceId: string) {
+  try {
+    await api.deleteVectorKBSource(sourceId)
+  } catch {
+    // 后端未重启时 DELETE 端点可能 404，不影响本地操作
+  }
+  // 无论后端是否成功，前端同步移除
+  vectorSources.value = vectorSources.value.filter(s => s.id !== sourceId)
+  vectorTotal.value = vectorSources.value.length
+  if (vectorQASourceId.value === sourceId) closeVectorQA()
+  ElMessage.success('已删除')
 }
 
 function openCausalNodeDialog() {
@@ -683,27 +772,89 @@ onMounted(async () => { await loadModels() })
             </div>
           </div>
           <el-table v-loading="loading" :data="vectorSources" stripe size="small">
-            <el-table-column prop="id" label="ID" width="80" />
-            <el-table-column prop="name" label="知识库名称" min-width="160" />
-            <el-table-column prop="url" label="接口地址" min-width="220" show-overflow-tooltip />
-            <el-table-column prop="embedding_model" label="嵌入模型" width="130" />
-            <el-table-column label="文档数" width="90" align="center">
+            <el-table-column prop="name" label="知识库名称" min-width="140" />
+            <el-table-column prop="retrieve_url" label="检索接口" min-width="220" show-overflow-tooltip />
+            <el-table-column label="文档数" width="80" align="center">
               <template #default="{ row }">{{ row.doc_count.toLocaleString() }}</template>
             </el-table-column>
-            <el-table-column label="状态" width="100" align="center">
+            <el-table-column label="状态" width="90" align="center">
               <template #default="{ row }">
                 <el-tag :type="vectorStatusType(row.status)" size="small">{{ row.status === 'connected' ? '已连接' : '未连接' }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="联通测试" width="130" align="center">
+            <el-table-column label="操作" width="200" align="center">
               <template #default="{ row }">
-                <div class="test-cell">
-                  <el-button size="small" :loading="modelTesting[row.id]" @click="handleTestVector(row)">测试</el-button>
-                </div>
+                <el-button size="small" :loading="modelTesting[row.id]" @click="handleTestVector(row)">测试</el-button>
+                <el-button type="primary" size="small" @click="openVectorQA(row)" :disabled="row.status !== 'connected'">问答</el-button>
+                <el-button type="danger" size="small" link @click="deleteVectorSource(row.id)">删除</el-button>
               </template>
             </el-table-column>
           </el-table>
           <el-empty v-if="vectorSources.length === 0 && !loading" description="暂未接入向量知识库，点击上方按钮接入" />
+
+          <!-- 向量知识库问答面板 -->
+          <div v-if="vectorQAActive" class="vector-qa-panel">
+            <div class="vector-qa-header">
+              <span class="vector-qa-title">
+                <el-icon style="margin-right:4px;"><ChatDotRound /></el-icon>
+                {{ vectorQASourceName }} — 知识库问答
+              </span>
+              <el-button size="small" text @click="closeVectorQA"><el-icon><Close /></el-icon></el-button>
+            </div>
+            <div class="vector-qa-messages">
+              <div v-if="vectorQAMessages.length === 0" class="vector-qa-empty">
+                输入问题开始问答，系统将检索向量知识库并生成回答
+              </div>
+              <div v-for="(msg, i) in vectorQAMessages" :key="i" :class="['vector-qa-msg', `vector-qa-msg-${msg.role}`]">
+                <div class="vector-qa-bubble">
+                  <template v-if="msg.role === 'user'">
+                    {{ msg.content }}
+                  </template>
+                  <template v-else>
+                    <div class="markdown-body" v-html="renderMarkdown(msg.content)"></div>
+                    <!-- 检索来源折叠 -->
+                    <div v-if="msg.chunks && msg.chunks.length" class="vector-qa-chunks">
+                      <el-collapse>
+                        <el-collapse-item>
+                          <template #title>
+                            <span class="chunk-toggle">📚 检索来源 ({{ msg.chunks.length }} 条)</span>
+                          </template>
+                          <div v-for="(chunk, ci) in msg.chunks" :key="ci" class="chunk-card">
+                            <div class="chunk-header" @click="toggleChunkExpand(i * 100 + ci)">
+                              <el-tag size="small" type="info">{{ chunk.source }}</el-tag>
+                              <el-tag v-if="chunk.knowledge_tags" size="small" type="warning" style="margin-left:4px;">{{ chunk.knowledge_tags }}</el-tag>
+                              <span class="chunk-score">相关度: {{ chunk.score.toFixed(3) }}</span>
+                              <span class="chunk-title">{{ chunk.title }}</span>
+                            </div>
+                            <div v-if="vectorQAExpandedChunks.has(i * 100 + ci)" class="chunk-text">
+                              {{ chunk.text }}
+                            </div>
+                          </div>
+                        </el-collapse-item>
+                      </el-collapse>
+                    </div>
+                  </template>
+                </div>
+              </div>
+              <div v-if="vectorQALoading" class="vector-qa-msg vector-qa-msg-assistant">
+                <div class="vector-qa-bubble">
+                  <el-icon class="is-loading"><Loading /></el-icon> 正在检索并生成回答...
+                </div>
+              </div>
+            </div>
+            <div class="vector-qa-input">
+              <el-input
+                v-model="vectorQAQuery"
+                placeholder="输入问题，如：磨煤机的工作原理是什么？"
+                @keyup.enter="handleVectorQA"
+                :disabled="vectorQALoading"
+              >
+                <template #append>
+                  <el-button type="primary" :loading="vectorQALoading" @click="handleVectorQA">发送</el-button>
+                </template>
+              </el-input>
+            </div>
+          </div>
         </el-tab-pane>
 
         <!-- Tab 4: Causal Graph -->
@@ -749,7 +900,7 @@ onMounted(async () => { await loadModels() })
 
           <div class="detail-section">
             <div class="section-title">词条内容</div>
-            <div class="section-content wiki-content pre-text">{{ currentWikiEntry.content }}</div>
+            <div class="section-content wiki-content markdown-body" v-html="renderMarkdown(currentWikiEntry.content)"></div>
           </div>
 
           <div v-if="currentWikiEntry.related_entries?.length" class="detail-section">
@@ -800,7 +951,7 @@ onMounted(async () => { await loadModels() })
 
         <div v-if="wikiQAAnswer" class="qa-answer">
           <div class="section-title">回答</div>
-          <div class="section-content pre-text">{{ wikiQAAnswer }}</div>
+          <div class="section-content markdown-body" v-html="renderMarkdown(wikiQAAnswer)"></div>
         </div>
 
         <div v-if="wikiQACitations.length" class="qa-citations">
@@ -899,17 +1050,26 @@ onMounted(async () => { await loadModels() })
     </el-dialog>
 
     <!-- Add Vector KB Dialog -->
-    <el-dialog v-model="showVectorDialog" title="接入外部向量知识库" width="520px">
-      <el-form :model="vectorForm" label-width="100px">
-        <el-form-item label="知识库名称"><el-input v-model="vectorForm.name" placeholder="如 燃机运维知识库" /></el-form-item>
-        <el-form-item label="接口地址"><el-input v-model="vectorForm.url" placeholder="如 http://192.168.1.200:8001/api/vectors" /></el-form-item>
-        <el-form-item label="嵌入模型">
-          <el-select v-model="vectorForm.embedding_model" filterable allow-create>
-            <el-option label="bge-large-zh" value="bge-large-zh" />
-            <el-option label="bge-small-zh" value="bge-small-zh" />
-            <el-option label="text2vec-large-chinese" value="text2vec-large-chinese" />
-            <el-option label="m3e-base" value="m3e-base" />
-          </el-select>
+    <el-dialog v-model="showVectorDialog" title="接入外部向量知识库" width="600px">
+      <el-form :model="vectorForm" label-width="110px">
+        <el-form-item label="知识库名称" required>
+          <el-input v-model="vectorForm.name" placeholder="如 燃机运维知识库" />
+        </el-form-item>
+        <el-form-item label="检索接口地址" required>
+          <el-input v-model="vectorForm.retrieve_url" placeholder="如 http://192.168.1.93:43425/retrieve" />
+          <div class="field-hint">外部 Milvus 检索服务的完整 URL</div>
+        </el-form-item>
+        <el-form-item label="OCR 接口地址">
+          <el-input v-model="vectorForm.ocr_url" placeholder="如 http://192.168.7.6:32281/file_parse（可选）" />
+        </el-form-item>
+        <el-form-item label="MinIO 地址">
+          <el-input v-model="vectorForm.minio_url" placeholder="如 http://192.168.111.4:39000（可选）" />
+        </el-form-item>
+        <el-form-item label="MinIO Bucket">
+          <el-input v-model="vectorForm.minio_bucket" placeholder="mineru" />
+        </el-form-item>
+        <el-form-item label="默认返回条数">
+          <el-input-number v-model="vectorForm.default_final_top_k" :min="1" :max="50" />
         </el-form-item>
       </el-form>
       <template #footer><el-button @click="showVectorDialog = false">取消</el-button><el-button type="primary" @click="handleAddVectorSource">确定</el-button></template>
@@ -1065,4 +1225,115 @@ onMounted(async () => { await loadModels() })
 .highlight-box { background: #f5f7fa; border-radius: 4px; padding: 10px 12px; font-weight: 500; }
 .wiki-content { max-height: 60vh; overflow-y: auto; }
 .raw-content-view { max-height: 65vh; overflow-y: auto; font-size: 13px; line-height: 1.8; color: #303133; }
+
+/* Markdown 渲染样式 */
+.markdown-body { font-size: 13px; line-height: 1.8; word-break: break-word; }
+.markdown-body img { max-width: 100%; border-radius: 4px; margin: 8px 0; cursor: pointer; }
+.markdown-body table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 12px; }
+.markdown-body th, .markdown-body td { border: 1px solid #dcdfe6; padding: 4px 8px; text-align: left; }
+.markdown-body th { background: #f0f2f5; font-weight: 600; }
+.markdown-body ul, .markdown-body ol { padding-left: 20px; margin: 4px 0; }
+.markdown-body code { background: #e4e7ed; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+.markdown-body pre { background: #1e1e1e; color: #d4d4d4; padding: 8px 12px; border-radius: 6px; overflow-x: auto; font-size: 12px; margin: 8px 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3 { margin: 10px 0 6px; font-weight: 600; color: #303133; }
+.markdown-body h1 { font-size: 18px; } .markdown-body h2 { font-size: 15px; } .markdown-body h3 { font-size: 14px; }
+.markdown-body blockquote { border-left: 3px solid #409eff; padding-left: 10px; margin: 6px 0; color: #606266; }
+.markdown-body a { color: #409eff; text-decoration: none; } .markdown-body a:hover { text-decoration: underline; }
+.markdown-body p { margin: 4px 0; }
+
+/* 向量知识库问答面板 */
+.vector-qa-panel {
+  margin-top: 16px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.vector-qa-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #e4e7ed;
+}
+.vector-qa-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  display: flex;
+  align-items: center;
+}
+.vector-qa-messages {
+  flex: 1;
+  min-height: 200px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 16px;
+  background: #fafafa;
+}
+.vector-qa-empty {
+  text-align: center;
+  color: #c0c4cc;
+  padding: 60px 0;
+  font-size: 13px;
+}
+.vector-qa-msg { margin-bottom: 12px; display: flex; }
+.vector-qa-msg-user { justify-content: flex-end; }
+.vector-qa-msg-assistant { justify-content: flex-start; }
+.vector-qa-msg-user .vector-qa-bubble {
+  background: #409eff;
+  color: #fff;
+  border-radius: 12px 12px 2px 12px;
+  max-width: 70%;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.vector-qa-msg-assistant .vector-qa-bubble {
+  background: #fff;
+  color: #303133;
+  border: 1px solid #e4e7ed;
+  border-radius: 12px 12px 12px 2px;
+  max-width: 85%;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.vector-qa-chunks { margin-top: 10px; }
+.chunk-toggle { font-size: 12px; color: #909399; }
+.chunk-card {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  border: 1px solid #ebeef5;
+}
+.chunk-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+.chunk-title { font-size: 12px; color: #606266; flex: 1; min-width: 120px; }
+.chunk-score { font-size: 11px; color: #67c23a; font-weight: 600; }
+.chunk-text {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed #dcdfe6;
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.vector-qa-input {
+  padding: 12px 16px;
+  border-top: 1px solid #e4e7ed;
+  background: #fff;
+}
 </style>

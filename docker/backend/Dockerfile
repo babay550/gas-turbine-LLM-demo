@@ -10,8 +10,7 @@ RUN rm -rf /usr/local/lib/python3.11/site-packages/pip* \
            /root/.cache
 
 COPY backend/src /app/src/
-RUN python -m compileall -b /app/src && find /app/src -name "*.py" -delete
 
 EXPOSE 8000
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

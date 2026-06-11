@@ -1,10 +1,11 @@
 """工作流编排 API — 工作流 CRUD、执行、模板、组件定义。"""
 
+import copy
 import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from src.core.workflow_engine import NODE_TYPES, TEMPLATES, execute_workflow
@@ -38,8 +39,20 @@ async def get_templates():
 
 
 @router.get("/node-types")
-async def get_node_types():
-    return NODE_TYPES
+async def get_node_types(request: Request):
+    """返回所有节点类型。skill_call 节点的 options 从 skill_registry 动态填充。"""
+    types = copy.deepcopy(NODE_TYPES)
+    try:
+        registry = request.app.state.skill_registry
+        names = [s.metadata.name for s in registry.list_skills(enabled_only=True)]
+        for nt in types:
+            if nt["type"] == "skill_call":
+                for f in nt["config_fields"]:
+                    if f["key"] == "skill_name":
+                        f["options"] = names
+    except AttributeError:
+        pass
+    return types
 
 
 @router.get("/{workflow_id}")

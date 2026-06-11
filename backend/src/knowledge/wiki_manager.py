@@ -295,12 +295,13 @@ class WikiManager:
             if tag and tag not in entry.tags:
                 continue
             if query_lower:
-                searchable = " ".join([
-                    entry.title, entry.category,
-                    " ".join(entry.tags),
-                    entry.content.lower(),
-                    entry.frontmatter.get("equipment", ""),
-                ]).lower()
+                # Safely build searchable text, guarding against None values in frontmatter/tags
+                title_s = entry.title or ""
+                category_s = entry.category or ""
+                tags_s = " ".join([t for t in (entry.tags or []) if t])
+                content_s = (entry.content or "").lower()
+                equipment_s = str(entry.frontmatter.get("equipment") or "")
+                searchable = " ".join([title_s, category_s, tags_s, content_s, equipment_s]).lower()
                 if query_lower not in searchable:
                     continue
             filtered.append(entry.to_meta_dict())
@@ -314,10 +315,13 @@ class WikiManager:
         """全文搜索 — 优先使用混合检索（BM25+Embedding+RRF），回退到 bigram 匹配。"""
         if use_hybrid:
             cs = self.chunk_store
-            if cs and cs.chunks:
-                results = cs.search(query, limit=limit)
-                if results:
-                    return results
+            if cs and getattr(cs, 'chunks', None):
+                try:
+                    results = cs.search(query, limit=limit)
+                    if results:
+                        return results
+                except Exception as e:
+                    logger.exception("ChunkStore search failed, falling back to bigram: %s", e)
 
         # Fallback: 原有 bigram 搜索
         all_entries = self._scan_all_files()
@@ -506,3 +510,59 @@ class WikiManager:
             return ""
         with open(idx_path, "r", encoding="utf-8") as f:
             return f.read()
+
+    def backfill_images(self) -> dict:
+        """为现有 wiki 词条补录关联图片引用。
+
+        读取 assets/manifest.json 获取 图片→源文件 映射，
+        仅将图片追加到同源文件的词条中（幂等）。
+        """
+        import json as _json
+
+        assets_dir = os.path.join(self.raw_dir, "assets")
+        manifest_path = os.path.join(assets_dir, "manifest.json")
+        if not os.path.isfile(manifest_path):
+            return {"updated": 0, "message": "assets/manifest.json 不存在，请先上传含图片的文档"}
+
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = _json.load(f)
+
+        if not manifest:
+            return {"updated": 0, "message": "manifest 为空，无图片映射记录"}
+
+        # 按 source_file 分组图片
+        supported_ext = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
+        images_by_source: dict[str, list[str]] = {}
+        for img_name, source in manifest.items():
+            if os.path.splitext(img_name)[1].lower() in supported_ext:
+                images_by_source.setdefault(source, []).append(img_name)
+
+        # 遍历词条，按 source_file 匹配图片
+        all_entries = self._scan_all_files()
+        updated = 0
+        for entry in all_entries:
+            source_file = entry.frontmatter.get("source_file", "")
+            if not source_file or source_file == "initial_migration":
+                continue
+            # 已有图片引用则跳过
+            if "## 相关图示" in entry.content:
+                continue
+            matched_images = images_by_source.get(source_file, [])
+            if not matched_images:
+                continue
+            # 追加图片引用
+            img_lines = ["", "## 相关图示", ""]
+            for idx, img_name in enumerate(matched_images, 1):
+                img_lines.append(f"![图{idx}](/api/knowledge/assets/{img_name})")
+            new_content = entry.content.rstrip() + "\n" + "\n".join(img_lines) + "\n"
+            if entry.file_path:
+                new_text = self._serialize_entry(entry.frontmatter, new_content)
+                with open(entry.file_path, "w", encoding="utf-8") as f:
+                    f.write(new_text)
+                updated += 1
+
+        if updated > 0:
+            self.rebuild_index()
+            self.append_log("图片补录", f"为 {updated} 条词条追加了图片引用（按源文件匹配）")
+
+        return {"updated": updated, "message": f"已为 {updated} 条词条追加图片引用（按源文件匹配）"}

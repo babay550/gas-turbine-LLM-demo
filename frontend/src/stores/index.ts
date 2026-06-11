@@ -18,6 +18,7 @@ import type {
   ChatCitation,
   DebugLogEntry,
   ChatSession,
+  SkillDefinition,
 } from '../types'
 import * as api from '../api'
 
@@ -91,11 +92,11 @@ export async function runEfficiency() {
   }
 }
 
-export async function runLoss() {
+export async function runLoss(aggregation: string = 'raw') {
   _analysis.loading = true
   _analysis.error = null
   try {
-    const res = await api.runLossAnalysis()
+    const res = await api.runLossAnalysis(aggregation)
     _analysis.loss = res.result
   } catch (e: unknown) {
     _analysis.error = e instanceof Error ? e.message : String(e)
@@ -322,12 +323,10 @@ export async function deleteSession(id: string) {
   }
 }
 
-export async function sendChatMessage(message: string) {
-  // Ensure we have a session (non-blocking — if it fails, send without session_id)
+export async function sendChatMessage(message: string, skillHint?: string) {
   if (!_chat.currentSessionId) {
     const session = await createSession()
     if (!session) {
-      // Session creation failed — proceed without persistence
       console.warn('Proceeding without session persistence')
     }
   }
@@ -336,7 +335,11 @@ export async function sendChatMessage(message: string) {
   _chat.loading = true
   _chat.error = null
   try {
-    const res = await api.sendMessage({ message, session_id: _chat.currentSessionId || undefined })
+    const res = await api.sendMessage({
+      message,
+      session_id: _chat.currentSessionId || undefined,
+      ...(skillHint ? { skill_hint: skillHint } : {}),
+    })
     const citations: ChatCitation[] = res.citations || []
     const debugLogs: DebugLogEntry[] = res.debug_logs || []
     _chat.messages.push({ role: 'assistant', content: res.answer, citations, debug_logs: debugLogs })
@@ -347,5 +350,33 @@ export async function sendChatMessage(message: string) {
   } finally {
     _chat.loading = false
     loadSessions()
+  }
+}
+
+// ---- Skill Store ----
+
+interface SkillState {
+  skills: SkillDefinition[]
+  loading: boolean
+  error: string | null
+}
+
+const _skills = reactive<SkillState>({
+  skills: [],
+  loading: false,
+  error: null,
+})
+
+export const skillStore = readonly(_skills)
+
+export async function loadSkills() {
+  _skills.loading = true
+  _skills.error = null
+  try {
+    _skills.skills = await api.getSkills()
+  } catch (e: unknown) {
+    _skills.error = e instanceof Error ? e.message : String(e)
+  } finally {
+    _skills.loading = false
   }
 }

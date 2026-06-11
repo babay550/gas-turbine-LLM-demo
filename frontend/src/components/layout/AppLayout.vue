@@ -14,28 +14,56 @@ import {
   Collection,
   Share,
   ChatDotSquare,
+  MagicStick,
+  Upload,
+  DataLine,
+  User,
+  Setting,
+  SwitchButton,
+  OfficeBuilding,
 } from '@element-plus/icons-vue'
+import { currentUser, isAdmin, logout } from '../../stores/auth'
 
 const route = useRoute()
 const router = useRouter()
 const chatVisible = ref(false)
-
 const isCollapsed = ref(false)
 
-const menuItems = [
-  { index: '/', icon: HomeFilled, title: '首页' },
-  { index: '/efficiency', icon: TrendCharts, title: '能效监测' },
-  { index: '/loss', icon: DataAnalysis, title: '耗差分析' },
-  { index: '/root-cause', icon: Connection, title: '根因诊断' },
-  { index: '/optimization', icon: SetUp, title: '运营优化' },
-  { index: '/warning', icon: Bell, title: '预警管理' },
-  { index: '/schedule', icon: Timer, title: '调度管理' },
-  { index: '/dictionary', icon: Notebook, title: '数据字典' },
-  { index: '/knowledge', icon: Collection, title: '模型与知识库' },
-  { index: '/workflow', icon: Share, title: '工作流编排' },
+// 所有菜单项，roles 为空表示所有角色可见
+const allMenuItems = [
+  { index: '/', icon: HomeFilled, title: '首页', roles: [] },
+  { index: '/efficiency', icon: TrendCharts, title: '能效监测', roles: [] },
+  { index: '/loss', icon: DataAnalysis, title: '耗差分析', roles: [] },
+  { index: '/root-cause', icon: Connection, title: '根因诊断', roles: [] },
+  { index: '/optimization', icon: SetUp, title: '运营优化', roles: [] },
+  { index: '/warning', icon: Bell, title: '预警管理', roles: [] },
+  { index: '/schedule', icon: Timer, title: '调度管理', roles: [] },
+  { index: '/data-import', icon: Upload, title: '数据导入', roles: ['admin', 'engineer'] },
+  { index: '/historical', icon: DataLine, title: '历史分析', roles: [] },
+  { index: '/dictionary', icon: Notebook, title: '数据字典', roles: ['admin', 'engineer'] },
+  { index: '/knowledge', icon: Collection, title: '模型与知识库', roles: [] },
+  { index: '/workflow', icon: Share, title: '工作流编排', roles: ['admin', 'engineer'] },
+  { index: '/skills', icon: MagicStick, title: '技能管理', roles: ['admin', 'engineer'] },
+  { index: '/users', icon: User, title: '用户管理', roles: ['admin'] },
+  { index: '/organizations', icon: OfficeBuilding, title: '组织管理', roles: ['admin'] },
 ]
 
+// 根据角色过滤菜单
+const menuItems = computed(() => {
+  const user = currentUser()
+  const role = user?.role || 'viewer'
+  return allMenuItems.filter(item => {
+    if (item.roles.length === 0) return true
+    return item.roles.includes(role)
+  })
+})
+
 const activeMenu = computed(() => route.path)
+
+const displayName = computed(() => {
+  const user = currentUser()
+  return user?.display_name || user?.username || '用户'
+})
 
 function handleSelect(index: string) {
   router.push(index)
@@ -43,6 +71,15 @@ function handleSelect(index: string) {
 
 function toggleChat() {
   chatVisible.value = !chatVisible.value
+}
+
+function handleLogout() {
+  logout()
+  router.push('/login')
+}
+
+function handleChangePassword() {
+  router.push('/change-password')
 }
 </script>
 
@@ -99,6 +136,26 @@ function toggleChat() {
             size="small"
             @click="toggleChat"
           />
+          <!-- 用户下拉菜单 -->
+          <el-dropdown trigger="click" @command="(cmd: string) => {
+            if (cmd === 'logout') handleLogout()
+            else if (cmd === 'password') handleChangePassword()
+          }">
+            <el-button circle size="small" :icon="User" />
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item disabled>
+                  <span style="font-weight: 600;">{{ displayName }}</span>
+                </el-dropdown-item>
+                <el-dropdown-item divided command="password" :icon="Setting">
+                  修改密码
+                </el-dropdown-item>
+                <el-dropdown-item command="logout" :icon="SwitchButton">
+                  退出登录
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </el-header>
 

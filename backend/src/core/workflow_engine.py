@@ -61,6 +61,11 @@ NODE_TYPES = [
      "description": "过滤、排序、聚合列表数据", "config_fields": []},
     {"type": "variable_store", "label": "变量存储", "category": "通用", "icon": "variable", "color": "#909399",
      "description": "存取中间变量", "config_fields": []},
+    {"type": "skill_call", "label": "技能调用", "category": "扩展", "icon": "plugin", "color": "#9b59b6",
+     "description": "调用已注册的 Agent 技能（HTTP/知识库/工作流/脚本）",
+     "config_fields": [
+         {"key": "skill_name", "label": "选择技能", "type": "select", "options": []},
+         {"key": "args", "label": "输入参数(JSON)", "type": "textarea", "default": "{}"}]},
 ]
 
 # ---- 预设模板 ----
@@ -202,6 +207,37 @@ def _exec_noop(state: WorkflowState, config: dict) -> WorkflowState:
     return {**state, "output": state.get("output", {})}
 
 
+def _exec_skill_call(state: WorkflowState, config: dict) -> WorkflowState:
+    """执行 Agent Skill 调用。"""
+    skill_name = config.get("skill_name", "")
+    args_json = config.get("args", "{}")
+    try:
+        args = json.loads(args_json) if isinstance(args_json, str) else args_json
+    except json.JSONDecodeError:
+        args = {}
+    # 注入上游输出
+    upstream = state.get("output", "")
+    if isinstance(upstream, str) and not args.get("query"):
+        args.setdefault("query", upstream)
+    elif isinstance(upstream, dict):
+        for k, v in upstream.items():
+            args.setdefault(k, v)
+    if _skill_executor_ref is None:
+        return {**state, "step": "skill_call", "skill": skill_name,
+                "output": {"error": "Skill 执行引擎未初始化"}}
+    result = _skill_executor_ref.execute_sync(skill_name, args)
+    return {**state, "step": "skill_call", "skill": skill_name, "output": result}
+
+
+# ---- Skill 执行引擎注入（由 main.py lifespan 调用）----
+_skill_executor_ref = None
+
+
+def set_skill_executor(executor):
+    global _skill_executor_ref
+    _skill_executor_ref = executor
+
+
 def _resolve_field(state: dict, field: str):
     """解析 'result.indicators.发电效率.value' 形式的字段路径。"""
     current = state
@@ -247,6 +283,7 @@ EXECUTORS = {
     "question_classifier": _exec_noop,
     "list_operation": _exec_noop,
     "variable_store": _exec_noop,
+    "skill_call": _exec_skill_call,
 }
 
 

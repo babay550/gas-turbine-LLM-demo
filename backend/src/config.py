@@ -17,13 +17,30 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.3
 
     # 数据模式
-    data_mode: str = "mock"
+    data_mode: str = "mock"  # mock | real
+
+    # 数据库配置
+    database_path: str = "data/gasturbine.db"
+    data_retention_days: int = 365
+
+    # JWT 认证配置
+    jwt_secret_key: str = "gas-turbine-llm-demo-secret-key-change-in-production"
+    jwt_expire_hours: int = 24
+    admin_default_password: str = "admin123"
 
     # 混合检索配置
     embedding_enabled: bool = True
     embedding_batch_size: int = 32
     rrf_k: int = 60
     chunk_max_size: int = 800
+
+    # 向量知识库（外部 Milvus 系统）默认配置
+    vector_retrieve_url: str = ""       # 如 http://192.168.1.93:43425/retrieve
+    vector_ocr_url: str = ""            # 如 http://192.168.7.6:32281/file_parse
+    vector_minio_url: str = ""          # 如 http://192.168.111.4:39000
+    vector_minio_bucket: str = "mineru"
+    vector_minio_ak: str = ""
+    vector_minio_sk: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

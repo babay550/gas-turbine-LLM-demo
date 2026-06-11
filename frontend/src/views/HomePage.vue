@@ -13,6 +13,8 @@ import {
   WarningFilled,
   Document,
 } from '@element-plus/icons-vue'
+import GasTurbineCanvas from '../components/meta2d/GasTurbineCanvas.vue'
+import ComponentDetailDrawer from '../components/meta2d/ComponentDetailDrawer.vue'
 
 const router = useRouter()
 
@@ -23,6 +25,15 @@ const metrics = ref([
   { label: '燃料流量', unit: '万Nm³/h', key: 'gas_flow', value: 0, delta: 0, icon: '🔥', color: '#e6a23c' },
   { label: '负荷率', unit: '%', key: 'load_rate', value: 0, delta: 0, icon: '📊', color: '#67c23a' },
 ])
+
+// Component detail drawer
+const drawerVisible = ref(false)
+const selectedComponent = ref<string | null>(null)
+
+function handleComponentSelect(id: string) {
+  selectedComponent.value = id
+  drawerVisible.value = true
+}
 
 // Analysis loading state
 const efficiencyLoading = ref(false)
@@ -121,48 +132,21 @@ onMounted(async () => {
       </el-col>
     </el-row>
 
-    <!-- Middle: Meta2d Schematic Placeholder -->
+    <!-- Middle: Meta2d Schematic -->
     <el-card shadow="never" class="schematic-card">
       <template #header>
-        <span style="font-weight: 600">燃机机组示意图 - Meta2d</span>
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <span style="font-weight: 600">燃机机组示意图</span>
+          <span style="font-size:12px;color:#909399">点击组件查看详情</span>
+        </div>
       </template>
-      <div class="schematic-area">
-        <svg viewBox="0 0 800 160" class="schematic-svg">
-          <!-- Compressor -->
-          <rect x="30" y="30" width="150" height="100" rx="8" fill="#e6f7ff" stroke="#409eff" stroke-width="2"/>
-          <text x="105" y="72" text-anchor="middle" fill="#409eff" font-size="14" font-weight="600">压气机</text>
-          <text x="105" y="95" text-anchor="middle" fill="#909399" font-size="11">Compressor</text>
-          <!-- Arrow 1 -->
-          <line x1="180" y1="80" x2="220" y2="80" stroke="#67c23a" stroke-width="3" marker-end="url(#arrowhead)"/>
-          <!-- Combustion Chamber -->
-          <rect x="230" y="20" width="160" height="120" rx="8" fill="#fff7e6" stroke="#e6a23c" stroke-width="2"/>
-          <text x="310" y="72" text-anchor="middle" fill="#e6a23c" font-size="14" font-weight="600">燃烧室</text>
-          <text x="310" y="95" text-anchor="middle" fill="#909399" font-size="11">Combustion Chamber</text>
-          <!-- Arrow 2 -->
-          <line x1="390" y1="80" x2="430" y2="80" stroke="#f56c6c" stroke-width="3" marker-end="url(#arrowhead)"/>
-          <!-- Turbine -->
-          <rect x="440" y="30" width="150" height="100" rx="8" fill="#fef0f0" stroke="#f56c6c" stroke-width="2"/>
-          <text x="515" y="72" text-anchor="middle" fill="#f56c6c" font-size="14" font-weight="600">透平</text>
-          <text x="515" y="95" text-anchor="middle" fill="#909399" font-size="11">Turbine</text>
-          <!-- Arrow 3 -->
-          <line x1="590" y1="80" x2="630" y2="80" stroke="#67c23a" stroke-width="3" marker-end="url(#arrowhead)"/>
-          <!-- Generator -->
-          <rect x="640" y="30" width="130" height="100" rx="8" fill="#f0f9eb" stroke="#67c23a" stroke-width="2"/>
-          <text x="705" y="72" text-anchor="middle" fill="#67c23a" font-size="14" font-weight="600">发电机</text>
-          <text x="705" y="95" text-anchor="middle" fill="#909399" font-size="11">Generator</text>
-          <!-- Arrowhead marker -->
-          <defs>
-            <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-              <polygon points="0 0, 10 3.5, 0 7" fill="#67c23a"/>
-            </marker>
-          </defs>
-          <!-- Flow label -->
-          <text x="200" y="25" fill="#67c23a" font-size="10">压缩空气</text>
-          <text x="405" y="25" fill="#f56c6c" font-size="10">高温燃气</text>
-          <text x="605" y="25" fill="#67c23a" font-size="10">机械功</text>
-        </svg>
-      </div>
+      <GasTurbineCanvas @select="handleComponentSelect" />
     </el-card>
+
+    <ComponentDetailDrawer
+      v-model:visible="drawerVisible"
+      :component-id="selectedComponent"
+    />
 
     <!-- Bottom Row -->
     <el-row :gutter="16" class="bottom-row">
@@ -300,19 +284,6 @@ onMounted(async () => {
 .schematic-card {
   flex-shrink: 0;
   border-radius: 8px;
-}
-
-.schematic-area {
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  padding: 8px 0;
-}
-
-.schematic-svg {
-  width: 100%;
-  max-width: 800px;
-  height: auto;
 }
 
 .bottom-row {
