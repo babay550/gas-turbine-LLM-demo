@@ -1,0 +1,36 @@
+services:
+  backend:
+    image: gas-turbine-backend:v1.0
+    build:
+      context: ..
+      dockerfile: docker/backend/Dockerfile
+    container_name: gas-turbine-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../backend/data:/app/data
+      - ../backend/knowledge:/app/knowledge
+      - ../backend/.env:/app/.env
+    environment:
+      - PYTHONPATH=/app
+    networks:
+      - gas-app-network
+    restart: unless-stopped
+
+  frontend:
+    image: gas-turbine-frontend:v1.0
+    build:
+      context: ..
+      dockerfile: docker/frontend/Dockerfile
+    container_name: gas-turbine-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    networks:
+      - gas-app-network
+    restart: unless-stopped
+
+networks:
+  gas-app-network:
+    driver: bridge

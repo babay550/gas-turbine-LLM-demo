@@ -1,0 +1,124 @@
+{
+  "categories": [
+    {
+      "name": "智慧电力",
+      "icon": "⚡",
+      "templates": [
+        {
+          "id": 1,
+          "title": "燃气轮机故障诊断",
+          "description": "基于 AI 的燃气轮机故障诊断系统，实时监测设备运行状态，智能预警潜在故障风险，提高设备可靠性和运行效率。",
+          "rootPath": "templates/gas-turbine",
+          "imageCount": 3,
+          "url": "https://example.com/gas-turbine"
+        },
+        {
+          "id": 2,
+          "title": "智能发电调度",
+          "description": "智能电网调度优化系统，实现新能源消纳与传统能源协同调度，最大化清洁能源利用率，降低碳排放。",
+          "rootPath": "templates/smart-grid",
+          "imageCount": 3,
+          "url": "https://example.com/smart-grid"
+        },
+        {
+          "id": 3,
+          "title": "设备运维管理",
+          "description": "全生命周期设备管理平台，集成设备档案、维护计划、备件管理，实现运维工作数字化、智能化管理。",
+          "rootPath": "templates/equipment-mgmt",
+          "imageCount": 3,
+          "url": "https://example.com/equipment-mgmt"
+        }
+      ]
+    },
+    {
+      "name": "智能制造",
+      "icon": "🏭",
+      "templates": [
+        {
+          "id": 4,
+          "title": "智能质检系统",
+          "description": "基于机器视觉的智能质检系统，自动检测产品缺陷，提升质检精度和效率，降低人工成本。",
+          "rootPath": "templates/quality-inspection",
+          "imageCount": 3,
+          "url": "https://example.com/quality-inspection"
+        },
+        {
+          "id": 5,
+          "title": "生产流程优化",
+          "description": "基于大数据分析的生产流程优化方案，识别瓶颈环节，优化生产节拍，提升整体产能效率。",
+          "rootPath": "templates/process-optimization",
+          "imageCount": 3,
+          "url": "https://example.com/process-optimization"
+        },
+        {
+          "id": 6,
+          "title": "供应链协同平台",
+          "description": "端到端供应链协同管理平台，实现供需精准匹配，降低库存成本，提升供应链响应速度。",
+          "rootPath": "templates/supply-chain",
+          "imageCount": 3,
+          "url": "https://example.com/supply-chain"
+        }
+      ]
+    },
+    {
+      "name": "智慧医疗",
+      "icon": "🏥",
+      "templates": [
+        {
+          "id": 7,
+          "title": "辅助诊断系统",
+          "description": "AI 辅助诊断系统，结合医学影像与临床数据，提供精准诊断建议，辅助医生决策。",
+          "rootPath": "templates/medical-diagnosis",
+          "imageCount": 3,
+          "url": "https://example.com/medical-diagnosis"
+        },
+        {
+          "id": 8,
+          "title": "健康管理平台",
+          "description": "全生命周期健康管理平台，集成健康监测、风险评估、个性化健康方案，促进健康生活方式。",
+          "rootPath": "templates/health-mgmt",
+          "imageCount": 3,
+          "url": "https://example.com/health-mgmt"
+        },
+        {
+          "id": 9,
+          "title": "远程医疗服务",
+          "description": "远程医疗会诊平台，打破地域限制，实现优质医疗资源共享，提升基层医疗服务水平。",
+          "rootPath": "templates/telemedicine",
+          "imageCount": 3,
+          "url": "https://example.com/telemedicine"
+        }
+      ]
+    },
+    {
+      "name": "智慧城市",
+      "icon": "🌆",
+      "templates": [
+        {
+          "id": 10,
+          "title": "智慧交通管理",
+          "description": "智能交通管控系统，实时监测交通流量，优化信号配时，缓解城市拥堵，提升出行效率。",
+          "rootPath": "templates/smart-traffic",
+          "imageCount": 3,
+          "url": "https://example.com/smart-traffic"
+        },
+        {
+          "id": 11,
+          "title": "城市安防监控",
+          "description": "AI 视频分析安防系统，自动识别异常行为，实时预警安全隐患，保障城市公共安全。",
+          "rootPath": "templates/city-security",
+          "imageCount": 3,
+          "url": "https://example.com/city-security"
+        },
+        {
+          "id": 12,
+          "title": "智慧园区管理",
+          "description": "综合性园区智能化管理平台，集成能耗管理、设施运维、访客管理等功能。",
+          "rootPath": "templates/smart-park",
+          "imageCount": 3,
+          "url": "https://example.com/smart-park"
+        }
+      ]
+    }
+  ]
+}
