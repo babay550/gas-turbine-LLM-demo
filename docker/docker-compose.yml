@@ -24,7 +24,7 @@ services:
       dockerfile: docker/frontend/Dockerfile
     container_name: gas-turbine-frontend
     ports:
-      - "8080:80"
+      - "18081:80"
     depends_on:
       - backend
     networks:
