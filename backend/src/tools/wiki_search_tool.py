@@ -22,7 +22,13 @@ def wiki_search(query: str) -> str:
         query: 搜索关键词或问题描述
     """
     wiki_mgr = _get_wiki_manager()
-    results = wiki_mgr.search_entries(query, limit=8, use_hybrid=True)
+    try:
+        results = wiki_mgr.search_entries(query, limit=8, use_hybrid=True)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception("wiki_search failed: %s", e)
+        return json.dumps({"total": 0, "message": "检索服务失败，请稍后重试", "error": str(e)}, ensure_ascii=False)
+
     if not results:
         return json.dumps({"total": 0, "message": "未找到相关知识词条"}, ensure_ascii=False)
 

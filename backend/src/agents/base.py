@@ -2,12 +2,16 @@
 
 import logging
 import time
+from datetime import datetime, timezone, timedelta
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
 from src.config import get_settings
+
+# 北京时间 UTC+8
+_BJT = timezone(timedelta(hours=8))
 
 logger = logging.getLogger(__name__)
 
@@ -74,8 +78,18 @@ class BaseAgent:
             "tools_registered": [t.name for t in self._tools],
         })
 
+        # 动态注入当前北京时间，让 LLM 能解析"今天""最近一周"等相对时间
+        _WEEKDAYS = "一二三四五六日"
+        now_bjt = datetime.now(_BJT)
+        time_context = (
+            "\n\n【系统时间】当前北京时间："
+            + now_bjt.strftime("%Y-%m-%d %H:%M:%S")
+            + "（星期" + _WEEKDAYS[now_bjt.weekday()] + "）\n"
+            "当用户提到\"今天\"、\"昨天\"、\"本周\"、\"最近X天/周/月\"等相对时间时，"
+            "以此系统时间为基准换算为具体日期范围。"
+        )
         messages = [
-            SystemMessage(content=self.system_prompt),
+            SystemMessage(content=self.system_prompt + time_context),
             HumanMessage(content=query),
         ]
 

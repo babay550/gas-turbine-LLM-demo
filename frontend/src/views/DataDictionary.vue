@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, reactive } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import * as api from '../api'
 import type { ParameterDefinition, BaselineConfig, BenchmarkIndicator } from '../types'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete, Edit } from '@element-plus/icons-vue'
 
 const activeTab = ref('parameters')
 const loading = ref(false)
@@ -14,10 +15,25 @@ const baselineTotal = ref(0)
 const benchmarkIndicators = ref<BenchmarkIndicator[]>([])
 const benchmarkTotal = ref(0)
 
-// --- Parameter add form ---
+// --- 搜索 ---
+const paramSearch = ref('')
+const filteredParameters = computed(() => {
+  if (!paramSearch.value) return parameters.value
+  const kw = paramSearch.value.toLowerCase()
+  return parameters.value.filter(p =>
+    p.name.toLowerCase().includes(kw) ||
+    p.id.toLowerCase().includes(kw) ||
+    ((p as any).subsystem || '').toLowerCase().includes(kw) ||
+    ((p as any).key || '').toLowerCase().includes(kw)
+  )
+})
+
+// --- Parameter add/edit form ---
 const showParamDialog = ref(false)
+const paramDialogMode = ref<'add' | 'edit'>('add')
 const paramForm = reactive({
-  id: '', name: '', unit: '', location: '', normal_range_min: 0, normal_range_max: 100, source: '', update_freq: '1s',
+  id: '', name: '', unit: '', subsystem: '其他', location: '',
+  normal_range_min: 0, normal_range_max: 100, source: '时序数据库', update_freq: '1s',
 })
 
 // --- Baseline add form ---
@@ -59,21 +75,62 @@ async function handleTabChange(tab: string) {
 
 function formatRange(range: [number, number]): string { return `${range[0]} ~ ${range[1]}` }
 
-function handleAddParameter() {
-  const newParam: ParameterDefinition = {
-    id: paramForm.id || `P${String(parameters.value.length + 1).padStart(3, '0')}`,
-    name: paramForm.name,
-    unit: paramForm.unit,
-    location: paramForm.location,
-    normal_range: [paramForm.normal_range_min, paramForm.normal_range_max],
-    source: paramForm.source,
-    update_freq: paramForm.update_freq,
+// ──── CRUD: 调用后端 API ────
+
+function openAddParamDialog() {
+  paramDialogMode.value = 'add'
+  Object.assign(paramForm, { id: '', name: '', unit: '', subsystem: '其他', location: '', normal_range_min: 0, normal_range_max: 100, source: '时序数据库', update_freq: '1s' })
+  showParamDialog.value = true
+}
+
+function openEditParamDialog(param: ParameterDefinition) {
+  paramDialogMode.value = 'edit'
+  Object.assign(paramForm, {
+    id: param.id,
+    name: param.name,
+    unit: param.unit,
+    subsystem: (param as any).subsystem || '其他',
+    location: param.location,
+    normal_range_min: param.normal_range?.[0] ?? 0,
+    normal_range_max: param.normal_range?.[1] ?? 100,
+    source: param.source,
+    update_freq: param.update_freq,
+  })
+  showParamDialog.value = true
+}
+
+async function handleSaveParameter() {
+  if (!paramForm.name) { ElMessage.warning('请填写参数名称'); return }
+  try {
+    if (paramDialogMode.value === 'add') {
+      await api.createParameter({
+        name: paramForm.name, unit: paramForm.unit, subsystem: paramForm.subsystem,
+        location: paramForm.location, normal_min: paramForm.normal_range_min,
+        normal_max: paramForm.normal_range_max, source: paramForm.source, update_freq: paramForm.update_freq,
+      })
+      ElMessage.success('监测参数已添加')
+    } else {
+      await api.updateParameter(paramForm.id, {
+        name: paramForm.name, unit: paramForm.unit, subsystem: paramForm.subsystem,
+        location: paramForm.location, normal_min: paramForm.normal_range_min,
+        normal_max: paramForm.normal_range_max, source: paramForm.source, update_freq: paramForm.update_freq,
+      })
+      ElMessage.success('参数已更新')
+    }
+    showParamDialog.value = false
+    await loadParameters()
+  } catch (e: any) {
+    ElMessage.error('操作失败: ' + (e.response?.data?.detail || e.message || e))
   }
-  parameters.value.push(newParam)
-  paramTotal.value = parameters.value.length
-  showParamDialog.value = false
-  Object.assign(paramForm, { id: '', name: '', unit: '', location: '', normal_range_min: 0, normal_range_max: 100, source: '', update_freq: '1s' })
-  ElMessage.success('监测参数已添加')
+}
+
+async function handleDeleteParameter(param: ParameterDefinition) {
+  try {
+    await ElMessageBox.confirm(`确定删除参数"${param.name}"？`, '确认删除', { type: 'warning' })
+    await api.deleteParameter(param.id)
+    await loadParameters()
+    ElMessage.success('参数已删除')
+  } catch { /* cancelled */ }
 }
 
 function handleAddBaseline() {
@@ -116,22 +173,31 @@ onMounted(async () => { await loadParameters() })
         <!-- Tab 1: Parameters -->
         <el-tab-pane label="监测参数" name="parameters">
           <div class="tab-header">
-            <span class="total-label">共 {{ paramTotal }} 条参数</span>
+            <el-input v-model="paramSearch" placeholder="搜索参数名/ID/子系统" clearable
+                      style="width: 220px;" size="small" />
             <div>
-              <el-button type="primary" size="small" @click="showParamDialog = true">添加参数</el-button>
+              <el-button type="primary" size="small" @click="openAddParamDialog">添加参数</el-button>
               <el-button size="small" @click="loadParameters">刷新</el-button>
             </div>
           </div>
-          <el-table v-loading="loading" :data="parameters" stripe size="small">
-            <el-table-column prop="id" label="参数ID" width="120" />
+          <el-table v-loading="loading" :data="filteredParameters" stripe size="small">
+            <el-table-column prop="id" label="参数ID" width="70" />
             <el-table-column prop="name" label="参数名称" min-width="140" />
-            <el-table-column prop="unit" label="单位" width="80" align="center" />
-            <el-table-column prop="location" label="位置" width="120" />
-            <el-table-column label="正常范围" width="130" align="center">
+            <el-table-column prop="unit" label="单位" width="70" align="center" />
+            <el-table-column prop="subsystem" label="子系统" width="80" />
+            <el-table-column prop="location" label="位置" width="100" />
+            <el-table-column label="正常范围" width="120" align="center">
               <template #default="{ row }">{{ formatRange(row.normal_range) }}</template>
             </el-table-column>
-            <el-table-column prop="source" label="来源" width="120" />
-            <el-table-column prop="update_freq" label="更新频率" width="90" />
+            <el-table-column prop="source" label="来源" width="100" />
+            <el-table-column prop="update_freq" label="频率" width="70" align="center" />
+            <el-table-column label="操作" width="100" fixed="right">
+              <template #default="{ row }">
+                <el-button size="small" link type="primary" @click="openEditParamDialog(row)">编辑</el-button>
+                <el-button size="small" link type="danger" @click="handleDeleteParameter(row)"
+                           :disabled="row.id === 'P001'">删除</el-button>
+              </template>
+            </el-table-column>
           </el-table>
         </el-tab-pane>
 
@@ -183,12 +249,27 @@ onMounted(async () => { await loadParameters() })
       </el-tabs>
     </el-card>
 
-    <!-- Add Parameter Dialog -->
-    <el-dialog v-model="showParamDialog" title="添加监测参数" width="520px">
+    <!-- Add/Edit Parameter Dialog -->
+    <el-dialog v-model="showParamDialog"
+               :title="paramDialogMode === 'add' ? '添加监测参数' : '编辑参数'"
+               width="520px">
       <el-form :model="paramForm" label-width="90px" size="default">
-        <el-form-item label="参数ID"><el-input v-model="paramForm.id" placeholder="如 P011，留空自动生成" /></el-form-item>
         <el-form-item label="参数名称"><el-input v-model="paramForm.name" placeholder="如 排气温度" /></el-form-item>
         <el-form-item label="单位"><el-input v-model="paramForm.unit" placeholder="如 °C" /></el-form-item>
+        <el-form-item label="子系统">
+          <el-select v-model="paramForm.subsystem">
+            <el-option label="燃气轮机" value="燃气轮机" />
+            <el-option label="压气机" value="压气机" />
+            <el-option label="燃烧室" value="燃烧室" />
+            <el-option label="透平" value="透平" />
+            <el-option label="发电机" value="发电机" />
+            <el-option label="汽机" value="汽机" />
+            <el-option label="余热锅炉" value="余热锅炉" />
+            <el-option label="辅助" value="辅助" />
+            <el-option label="环境" value="环境" />
+            <el-option label="其他" value="其他" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="位置"><el-input v-model="paramForm.location" placeholder="如 透平出口" /></el-form-item>
         <el-form-item label="正常下限"><el-input-number v-model="paramForm.normal_range_min" :step="1" /></el-form-item>
         <el-form-item label="正常上限"><el-input-number v-model="paramForm.normal_range_max" :step="1" /></el-form-item>
@@ -197,7 +278,7 @@ onMounted(async () => { await loadParameters() })
       </el-form>
       <template #footer>
         <el-button @click="showParamDialog = false">取消</el-button>
-        <el-button type="primary" @click="handleAddParameter">确定</el-button>
+        <el-button type="primary" @click="handleSaveParameter">{{ paramDialogMode === 'add' ? '添加' : '保存' }}</el-button>
       </template>
     </el-dialog>
 

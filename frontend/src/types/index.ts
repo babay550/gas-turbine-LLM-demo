@@ -55,6 +55,8 @@ export interface LossItem {
   name: string
   value: number
   design: number
+  best?: number
+  unit?: string
 }
 
 export interface LossAnalysisResult {
@@ -62,6 +64,7 @@ export interface LossAnalysisResult {
   unit_id: string
   total_loss: number
   total_design_loss: number
+  total_best_loss?: number
   items: LossItem[]
   major_losses: LossItem[]
 }
@@ -441,15 +444,42 @@ export interface WikiGraphData {
 export interface VectorKBSource {
   id: string
   name: string
-  url: string
-  embedding_model: string
+  retrieve_url: string
+  ocr_url?: string
+  minio_url?: string
+  minio_bucket?: string
   doc_count: number
   status: 'connected' | 'disconnected'
+  default_final_top_k?: number
+  default_hyde_mode?: boolean
+  default_query_decomposition_mode?: boolean
 }
 
 export interface VectorKBSourceListResponse {
   sources: VectorKBSource[]
   total: number
+}
+
+export interface VectorRetrieveChunk {
+  original_id: number
+  document_id: string | null
+  text: string
+  source: string
+  title: string
+  score: number
+  knowledge_tags: string
+}
+
+export interface VectorRetrieveResponse {
+  results: VectorRetrieveChunk[]
+  total: number
+  latency_ms?: number
+}
+
+export interface VectorQAResponse {
+  answer: string
+  chunks: VectorRetrieveChunk[]
+  processing_time_ms?: number
 }
 
 // ---- Model connectivity test ----
@@ -624,4 +654,216 @@ export interface ApiErrorResponse {
 export interface ApiSuccessResponse {
   success: boolean
   message?: string
+}
+
+// ---- Skills ----
+
+export interface SkillInputField {
+  name: string
+  type: 'string' | 'number' | 'boolean' | 'object' | 'array'
+  description: string
+  required: boolean
+  default?: unknown
+}
+
+export interface SkillOutputField {
+  name: string
+  type: 'string' | 'number' | 'boolean' | 'object' | 'array'
+  description: string
+}
+
+export interface SkillDefinition {
+  name: string
+  version: string
+  description: string
+  skill_type: 'http' | 'dataset' | 'workflow' | 'python' | 'shell' | 'db'
+  trigger_words: string[]
+  inputs: SkillInputField[]
+  outputs: SkillOutputField[]
+  execution: Record<string, unknown>
+  enabled: boolean
+  timeout: number
+  sandbox: boolean
+}
+
+export interface SkillCreateRequest {
+  name: string
+  description: string
+  skill_type: 'http' | 'dataset' | 'workflow' | 'python' | 'shell' | 'db'
+  version?: string
+  trigger_words?: string[]
+  inputs?: SkillInputField[]
+  outputs?: SkillOutputField[]
+  execution: Record<string, unknown>
+  enabled?: boolean
+}
+
+export interface SkillTypeOption {
+  value: string
+  label: string
+  description: string
+  execution_schema: Record<string, string>
+}
+
+export interface SkillExecuteResult {
+  status: 'success' | 'error'
+  data?: unknown
+  error?: string
+  elapsed_ms?: number
+  skill?: string
+}
+
+export interface SkillFileInfo {
+  path: string
+  name: string
+  size: number
+}
+
+export interface SkillFileContent {
+  path: string
+  content: string | null
+  binary: boolean
+  size: number
+}
+
+// ---- Data Import ----
+
+export interface ImportPreview {
+  job_id: number
+  filename: string
+  file_type: string
+  columns: string[]
+  preview_rows: Record<string, string>[]
+  row_count: number
+  detected_timestamp_column: string | null
+  format_hint: 'wide' | 'long'
+}
+
+export interface ImportColumnMapping {
+  timestamp_column: string
+  timestamp_format?: string
+  format_type: 'wide' | 'long'
+  unit_id: string
+  column_map?: Record<string, string>
+  long_param_column?: string
+  long_value_column?: string
+}
+
+export interface ImportJob {
+  id: number
+  filename: string
+  file_type: string
+  file_size: number
+  status: 'pending' | 'preview' | 'parsing' | 'validating' | 'storing' | 'completed' | 'error'
+  total_rows: number
+  imported_rows: number
+  skipped_rows: number
+  error_message: string | null
+  format_type: string
+  unit_id: string
+  created_at: string | null
+  completed_at: string | null
+}
+
+// ---- Historical Data Query ----
+
+export interface TimeRangeInfo {
+  has_data: boolean
+  unit_id: string
+  min_timestamp?: string
+  max_timestamp?: string
+  total_points?: number
+}
+
+export interface TimeSeriesQueryResponse {
+  data: Record<string, (number | null | string)[]>
+  period_days: number
+  point_count: number
+}
+
+export interface ParameterStat {
+  has_data: boolean
+  parameter_key: string
+  parameter_name?: string
+  unit?: string
+  count: number
+  mean: number | null
+  std: number | null
+  min: number | null
+  max: number | null
+  normal_min: number | null
+  normal_max: number | null
+  out_of_range_count: number
+}
+
+export interface ParameterTrendResponse {
+  parameter_key: string
+  data: Record<string, (number | null | string)[]>
+  stats: ParameterStat
+  period_days: number
+}
+
+// ---- Auth ----
+
+export interface LoginRequest {
+  username: string
+  password: string
+}
+
+export interface LoginResponse {
+  access_token: string
+  token_type: string
+  user: UserInfo
+}
+
+export interface UserInfo {
+  id: number
+  username: string
+  display_name: string
+  email: string
+  phone: string
+  role: 'admin' | 'engineer' | 'viewer'
+  org_id: number | null
+  org_name?: string
+  is_active: boolean
+  last_login: string | null
+  created_at: string | null
+}
+
+export interface UserListResponse {
+  users: UserInfo[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface UserCreateRequest {
+  username: string
+  password: string
+  display_name?: string
+  email?: string
+  phone?: string
+  role?: string
+  org_id?: number | null
+}
+
+export interface Organization {
+  id: number
+  name: string
+  parent_id: number | null
+  code: string
+  description: string
+  sort_order: number
+  is_active: boolean
+  created_at: string | null
+  children?: Organization[]
+}
+
+export interface OrganizationTreeResponse {
+  organizations: Organization[]
+}
+
+export interface ChangePasswordRequest {
+  old_password: string
+  new_password: string
 }

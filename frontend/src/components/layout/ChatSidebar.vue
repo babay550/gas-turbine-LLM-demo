@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted } from 'vue'
-import { chatStore, sendChatMessage, createSession, switchSession, deleteSession, loadSessions } from '../../stores'
-import type { DebugLogEntry } from '../../types'
+import { ref, nextTick, watch, onMounted, computed } from 'vue'
+import { chatStore, skillStore, sendChatMessage, loadSkills, createSession, switchSession, deleteSession, loadSessions } from '../../stores'
+import type { DebugLogEntry, SkillDefinition } from '../../types'
+import { renderMarkdown } from '../../utils/markdown'
 
 const inputText = ref('')
 const messageListRef = ref<HTMLElement>()
@@ -9,19 +10,73 @@ const showDebug = ref<Record<number, boolean>>({})
 const debugMode = ref(false)
 const showHistory = ref(false)
 
+// ---- @mention 状态 ----
+const mentionQuery = ref('')
+const showMentionPopup = ref(false)
+const mentionStartIndex = ref(-1)
+const selectedMentionIndex = ref(0)
+const selectedSkill = ref<string | null>(null)
+
+const filteredSkills = computed(() => {
+  if (!mentionQuery.value) return skillStore.skills
+  const q = mentionQuery.value.toLowerCase()
+  return skillStore.skills.filter(s =>
+    s.name.toLowerCase().includes(q) ||
+    s.description.toLowerCase().includes(q) ||
+    s.trigger_words.some(tw => tw.toLowerCase().includes(q))
+  )
+})
+
+// Resizable width
+const MIN_WIDTH = 280
+const MAX_WIDTH = 700
+const DEFAULT_WIDTH = 360
+const sidebarWidth = ref(DEFAULT_WIDTH)
+const isResizing = ref(false)
+
+function startResize(e: MouseEvent) {
+  e.preventDefault()
+  isResizing.value = true
+  const startX = e.clientX
+  const startW = sidebarWidth.value
+
+  function onMouseMove(ev: MouseEvent) {
+    const delta = startX - ev.clientX // drag left → wider
+    const next = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startW + delta))
+    sidebarWidth.value = next
+  }
+
+  function onMouseUp() {
+    isResizing.value = false
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+}
+
 const props = defineProps<{
   visible: boolean
 }>()
 
 onMounted(() => {
   loadSessions()
+  loadSkills()
 })
 
 function handleSend() {
   const text = inputText.value.trim()
   if (!text) return
   inputText.value = ''
-  sendChatMessage(text)
+  const hint = selectedSkill.value
+  selectedSkill.value = null
+  showMentionPopup.value = false
+  sendChatMessage(text, hint || undefined)
 }
 
 async function handleNewSession() {
@@ -48,10 +103,46 @@ function formatTime(iso: string): string {
 }
 
 function handleKeydown(e: KeyboardEvent) {
+  if (showMentionPopup.value) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); selectedMentionIndex.value = Math.min(selectedMentionIndex.value + 1, filteredSkills.value.length - 1); return }
+    if (e.key === 'ArrowUp') { e.preventDefault(); selectedMentionIndex.value = Math.max(selectedMentionIndex.value - 1, 0); return }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (filteredSkills.value.length > 0) selectSkill(filteredSkills.value[selectedMentionIndex.value]); return }
+    if (e.key === 'Escape') { e.preventDefault(); showMentionPopup.value = false; return }
+  }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     handleSend()
   }
+}
+
+// ---- @mention 输入检测 ----
+watch(inputText, (text) => {
+  if (!text) { showMentionPopup.value = false; return }
+  const lastAt = text.lastIndexOf('@', text.length - 1)
+  if (lastAt >= 0) {
+    const afterAt = text.substring(lastAt + 1)
+    if (!afterAt.includes(' ') && !afterAt.includes('\n')) {
+      mentionQuery.value = afterAt
+      mentionStartIndex.value = lastAt
+      showMentionPopup.value = true
+      selectedMentionIndex.value = 0
+      return
+    }
+  }
+  showMentionPopup.value = false
+})
+
+function selectSkill(skill: SkillDefinition) {
+  const before = inputText.value.substring(0, mentionStartIndex.value)
+  const after = inputText.value.substring(mentionStartIndex.value + 1 + mentionQuery.value.length)
+  inputText.value = before + '@' + skill.name + ' ' + after
+  selectedSkill.value = skill.name
+  showMentionPopup.value = false
+}
+
+function skillTypeIcon(type: string): string {
+  const map: Record<string, string> = { http: '🌐', dataset: '📚', workflow: '🔗', python: '🐍', shell: '🖥️', db: '🗄️' }
+  return map[type] || '🔧'
 }
 
 function toggleDebug(idx: number) {
@@ -121,7 +212,13 @@ watch(
 
 <template>
   <transition name="chat-slide">
-    <div v-if="visible" class="chat-sidebar">
+    <div v-if="visible" class="chat-sidebar" :style="{ width: sidebarWidth + 'px' }">
+      <!-- Drag handle on the left edge -->
+      <div
+        class="resize-handle"
+        :class="{ active: isResizing }"
+        @mousedown="startResize"
+      />
       <div class="chat-header">
         <span class="chat-title">智能助手</span>
         <el-tag size="small" type="success" style="margin-left:8px;">GLM-5</el-tag>
@@ -185,7 +282,8 @@ watch(
           :class="['chat-bubble', msg.role === 'user' ? 'bubble-user' : 'bubble-assistant']"
         >
           <div class="bubble-role">{{ msg.role === 'user' ? '我' : '助手' }}</div>
-          <div class="bubble-content">{{ msg.content }}</div>
+          <div v-if="msg.role === 'user'" class="bubble-content">{{ msg.content }}</div>
+          <div v-else class="bubble-content markdown-body" v-html="renderMarkdown(msg.content)"></div>
 
           <!-- Citations -->
           <div v-if="msg.citations && msg.citations.length > 0" class="bubble-citations">
@@ -222,11 +320,32 @@ watch(
         </div>
       </div>
       <div class="chat-input-area">
+        <!-- @mention 浮层 -->
+        <div v-if="showMentionPopup && filteredSkills.length > 0" class="mention-popup">
+          <div class="mention-popup-title">选择技能</div>
+          <div
+            v-for="(skill, idx) in filteredSkills.slice(0, 6)"
+            :key="skill.name"
+            :class="['mention-item', idx === selectedMentionIndex ? 'mention-active' : '']"
+            @click="selectSkill(skill)"
+            @mouseenter="selectedMentionIndex = idx"
+          >
+            <span class="mention-icon">{{ skillTypeIcon(skill.skill_type) }}</span>
+            <div class="mention-info">
+              <span class="mention-name">{{ skill.name }}</span>
+              <span class="mention-desc">{{ skill.description }}</span>
+            </div>
+          </div>
+        </div>
+        <!-- 已选 Skill 标签 -->
+        <div v-if="selectedSkill" class="selected-skill-tag">
+          <el-tag closable type="warning" @close="selectedSkill = null">@ {{ selectedSkill }}</el-tag>
+        </div>
         <el-input
           v-model="inputText"
           type="textarea"
           :rows="2"
-          placeholder="输入问题..."
+          :placeholder="selectedSkill ? `向 @${selectedSkill} 提问...` : '输入问题... (@ 触发技能)'"
           :disabled="chatStore.loading"
           @keydown="handleKeydown"
         />
@@ -251,13 +370,30 @@ export default { components: { ChatDotRound, Loading, Promotion } }
 
 <style scoped>
 .chat-sidebar {
-  width: 360px;
   height: 100%;
   background: #fff;
   border-left: 1px solid #e4e7ed;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  position: relative;
+}
+
+.resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.2s;
+}
+
+.resize-handle:hover,
+.resize-handle.active {
+  background: #409eff;
 }
 
 .chat-header {
@@ -349,6 +485,74 @@ export default { components: { ChatDotRound, Loading, Promotion } }
   background: #f4f4f5;
   color: #303133;
   border-bottom-left-radius: 2px;
+  white-space: normal;
+}
+
+.bubble-assistant .markdown-body img {
+  max-width: 100%;
+  border-radius: 4px;
+  margin: 8px 0;
+  cursor: pointer;
+}
+
+.bubble-assistant .markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 12px;
+}
+
+.bubble-assistant .markdown-body th,
+.bubble-assistant .markdown-body td {
+  border: 1px solid #dcdfe6;
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.bubble-assistant .markdown-body th {
+  background: #f0f2f5;
+  font-weight: 600;
+}
+
+.bubble-assistant .markdown-body ul,
+.bubble-assistant .markdown-body ol {
+  padding-left: 20px;
+  margin: 4px 0;
+}
+
+.bubble-assistant .markdown-body code {
+  background: #e4e7ed;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.bubble-assistant .markdown-body pre {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 8px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+.bubble-assistant .markdown-body h1,
+.bubble-assistant .markdown-body h2,
+.bubble-assistant .markdown-body h3 {
+  margin: 8px 0 4px;
+  font-weight: 600;
+}
+
+.bubble-assistant .markdown-body h1 { font-size: 16px; }
+.bubble-assistant .markdown-body h2 { font-size: 14px; }
+.bubble-assistant .markdown-body h3 { font-size: 13px; }
+
+.bubble-assistant .markdown-body blockquote {
+  border-left: 3px solid #409eff;
+  padding-left: 10px;
+  margin: 6px 0;
+  color: #606266;
 }
 
 /* Citation styles */
@@ -559,4 +763,41 @@ export default { components: { ChatDotRound, Loading, Promotion } }
   width: 24px;
   height: 24px;
 }
+
+/* @mention popup */
+.mention-popup {
+  position: absolute;
+  bottom: 140px;
+  left: 12px;
+  right: 12px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.12);
+  z-index: 20;
+}
+.mention-popup-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #909399;
+  padding: 6px 10px 4px;
+  border-bottom: 1px solid #f0f2f5;
+}
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  transition: background .15s;
+}
+.mention-item:hover,
+.mention-active { background: #ecf5ff; }
+.mention-icon { font-size: 16px; flex-shrink: 0; }
+.mention-info { display: flex; flex-direction: column; min-width: 0; }
+.mention-name { font-size: 12px; font-weight: 600; color: #303133; }
+.mention-desc { font-size: 11px; color: #909399; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.selected-skill-tag { margin-bottom: 6px; }
 </style>

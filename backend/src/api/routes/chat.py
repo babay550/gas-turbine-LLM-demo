@@ -126,10 +126,48 @@ async def send_message(request: Request):
     body = await request.json()
     query = body.get("message", "")
     session_id = body.get("session_id")
+    skill_hint = body.get("skill_hint")  # @mention 指定的 Skill
 
     scheduler = request.app.state.scheduler
 
-    # 尝试调用 Agent（LLM + 工具），有超时兜底
+    # @mention 直接执行指定 Skill
+    if skill_hint:
+        try:
+            skill_registry = request.app.state.skill_registry
+            skill_executor = request.app.state.skill_executor
+            skill = skill_registry.get_skill(skill_hint)
+            if skill and skill.metadata.enabled:
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    _executor, skill_executor.execute_sync, skill_hint, {"query": query})
+                if result.get("status") == "success":
+                    import json as _json
+                    data = result.get("data", {})
+                    # 优先提取纯文本 answer（避免 json.dumps 双重序列化导致 \n 不可读）
+                    if isinstance(data, dict) and "answer" in data:
+                        answer = data["answer"]
+                    elif isinstance(data, (dict, list)):
+                        answer = _json.dumps(data, ensure_ascii=False, default=str)
+                    else:
+                        answer = str(data)
+                else:
+                    answer = f"Skill 执行失败: {result.get('error', '未知错误')}"
+                citations = [{"tool": f"skill_{skill_hint}",
+                              "label": f"技能: {skill.metadata.description}",
+                              "summary": str(result.get("data", ""))[:200]}]
+                debug_logs = [{"step": "skill_exec", "skill": skill_hint,
+                               "status": result.get("status"), "elapsed_ms": result.get("elapsed_ms", 0)}]
+                if session_id:
+                    append_message(session_id, "user", query)
+                    append_message(session_id, "assistant", answer, citations, debug_logs)
+                return {"answer": answer, "citations": citations,
+                        "tool_results": [{"tool": f"skill_{skill_hint}", "args": {"query": query}, "result": result}],
+                        "debug_logs": debug_logs}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Skill 直接执行失败，回退 Agent: %s", e)
+
+    # 正常 Agent 调度（LLM 可能自动选择 Skill Tool）
     try:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(_executor, scheduler.dispatch, query)

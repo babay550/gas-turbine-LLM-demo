@@ -1,5 +1,6 @@
 """文档解析器 — 将 docx/pptx/pdf/xlsx/md 转为 markdown 文本供 LLM 读取。"""
 
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -101,25 +102,42 @@ class DocumentParser:
         )
 
     def _extract_docx_images(self, doc, path: str) -> list[str]:
-        """从 docx 中提取图片到 assets 目录。"""
+        """从 docx 中提取图片到 assets 目录，返回文件名列表，同时更新 manifest。"""
         images = []
         try:
             from docx.opc.constants import RELATIONSHIP_TYPE as RT
             import hashlib
 
+            source_name = os.path.basename(path)
             for rel in doc.part.rels.values():
                 if "image" in rel.reltype:
                     img_data = rel.target_part.blob
                     ext = os.path.splitext(rel.target_part.partname)[1] or ".png"
                     h = hashlib.md5(img_data).hexdigest()[:8]
-                    img_name = f"{os.path.splitext(os.path.basename(path))[0]}_{h}{ext}"
+                    img_name = f"{h}{ext}"
                     img_path = os.path.join(self.assets_dir, img_name)
                     with open(img_path, "wb") as f:
                         f.write(img_data)
-                    images.append(img_path)
+                    images.append(img_name)
+                    # 记录 hash → source 映射
+                    self._update_manifest(img_name, source_name)
         except Exception as e:
             logger.warning("提取 docx 图片失败: %s", e)
         return images
+
+    def _update_manifest(self, img_name: str, source_name: str):
+        """更新 assets/manifest.json，记录图片与源文件的映射。"""
+        manifest_path = os.path.join(self.assets_dir, "manifest.json")
+        manifest = {}
+        if os.path.exists(manifest_path):
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    manifest = json.load(f)
+            except Exception:
+                pass
+        manifest[img_name] = source_name
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
 
     def _parse_pptx(self, path: str) -> ParsedDocument:
         from pptx import Presentation

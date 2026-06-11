@@ -122,8 +122,19 @@ KNOWLEDGE_BASE = {
     ],
     "expert_rules": EXPERT_RULES,
     "vector_kb_sources": [
-        {"id": "V001", "name": "燃机运维向量知识库", "url": "http://192.168.1.200:8001/api/vectors", "embedding_model": "bge-large-zh", "doc_count": 1240, "status": "connected"},
-        {"id": "V002", "name": "设备手册知识库", "url": "http://192.168.1.200:8002/api/vectors", "embedding_model": "bge-large-zh", "doc_count": 356, "status": "disconnected"},
+        {
+            "id": "V001",
+            "name": "燃机运维向量知识库",
+            "retrieve_url": "http://192.168.1.93:43425/retrieve",
+            "ocr_url": "http://192.168.7.6:32281/file_parse",
+            "minio_url": "http://192.168.111.4:39000",
+            "minio_bucket": "mineru",
+            "doc_count": 1240,
+            "status": "disconnected",
+            "default_final_top_k": 10,
+            "default_hyde_mode": False,
+            "default_query_decomposition_mode": False,
+        },
     ],
     "causal_graph": CAUSAL_GRAPH,
 }
@@ -254,28 +265,49 @@ async def add_vector_kb_source(body: dict):
     entry = {
         "id": new_id,
         "name": body.get("name", ""),
-        "url": body.get("url", ""),
-        "embedding_model": body.get("embedding_model", "bge-large-zh"),
+        "retrieve_url": body.get("retrieve_url", ""),
+        "ocr_url": body.get("ocr_url", ""),
+        "minio_url": body.get("minio_url", ""),
+        "minio_bucket": body.get("minio_bucket", "mineru"),
         "doc_count": 0,
         "status": "disconnected",
+        "default_final_top_k": body.get("default_final_top_k", 10),
+        "default_hyde_mode": body.get("default_hyde_mode", False),
+        "default_query_decomposition_mode": body.get("default_query_decomposition_mode", False),
     }
     KNOWLEDGE_BASE["vector_kb_sources"].append(entry)
     return {"success": True, "id": new_id, "message": "向量知识库已接入"}
 
 
+@router.delete("/knowledge/vector-sources/{source_id}")
+async def delete_vector_kb_source(source_id: str):
+    """删除向量知识库接入。"""
+    sources = KNOWLEDGE_BASE["vector_kb_sources"]
+    idx = next((i for i, s in enumerate(sources) if s["id"] == source_id), None)
+    if idx is None:
+        return {"success": False, "error": "向量知识库不存在"}
+    sources.pop(idx)
+    return {"success": True, "message": "已删除"}
+
+
 @router.post("/knowledge/vector-sources/{source_id}/test")
 async def test_vector_kb_connection(source_id: str):
-    """测试向量知识库联通性。"""
+    """测试向量知识库联通性 — 向 retrieve_url 发送探测请求。"""
     source = next((s for s in KNOWLEDGE_BASE["vector_kb_sources"] if s["id"] == source_id), None)
     if source is None:
         return {"success": False, "error": "向量知识库不存在"}
 
+    retrieve_url = source.get("retrieve_url", "")
+    if not retrieve_url:
+        return {"success": False, "error": "未配置检索接口地址", "status": "disconnected"}
+
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    import time
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            import time
+        async with httpx.AsyncClient(timeout=10.0) as client:
             start = time.monotonic()
-            resp = await client.get(source["url"], timeout=5.0)
+            # 用一个最简 query 测试连通性
+            resp = await client.post(retrieve_url, json={"query": "test", "final_top_k": 1}, timeout=10.0)
             latency_ms = round((time.monotonic() - start) * 1000, 1)
 
         is_success = 200 <= resp.status_code < 300
@@ -287,9 +319,161 @@ async def test_vector_kb_connection(source_id: str):
             "last_check": now_str,
             "message": "联通成功" if is_success else f"返回状态码 {resp.status_code}",
         }
+    except httpx.ConnectError:
+        source["status"] = "disconnected"
+        return {"success": False, "error": "连接失败，目标服务不可达", "status": "disconnected", "last_check": now_str}
+    except httpx.TimeoutException:
+        source["status"] = "disconnected"
+        return {"success": False, "error": "连接超时（10s）", "status": "disconnected", "last_check": now_str}
     except Exception as e:
         source["status"] = "disconnected"
         return {"success": False, "error": str(e), "status": "disconnected", "last_check": now_str}
+
+
+# -------------------------------------------------------------------------
+# 向量知识库 — 检索代理 & 问答
+# -------------------------------------------------------------------------
+
+
+def _find_vector_source(source_id: str) -> dict | None:
+    return next((s for s in KNOWLEDGE_BASE["vector_kb_sources"] if s["id"] == source_id), None)
+
+
+@router.post("/knowledge/vector-sources/{source_id}/retrieve")
+async def vector_retrieve(source_id: str, body: dict):
+    """代理向量检索请求到外部 Milvus 检索接口。"""
+    source = _find_vector_source(source_id)
+    if source is None:
+        return JSONResponse(status_code=404, content={"error": "向量知识库不存在"})
+
+    retrieve_url = source.get("retrieve_url", "")
+    if not retrieve_url:
+        return JSONResponse(status_code=400, content={"error": "未配置检索接口地址"})
+
+    query = body.get("query", "")
+    if not query:
+        return JSONResponse(status_code=400, content={"error": "请输入查询内容"})
+
+    # 构建检索参数 — 仅传递非空值
+    params: dict = {"query": query}
+    optional_keys = [
+        "tags", "tag_match_all", "debug_mode", "hyde_mode",
+        "query_decomposition_mode", "doc_sources", "chunks_per_doc",
+        "text_min_length", "final_top_k", "max_similarity", "user_id",
+    ]
+    for key in optional_keys:
+        if key in body and body[key] is not None:
+            params[key] = body[key]
+
+    # 回退到 source 级别的默认配置
+    if "final_top_k" not in params and source.get("default_final_top_k"):
+        params["final_top_k"] = source["default_final_top_k"]
+    if "hyde_mode" not in params and source.get("default_hyde_mode"):
+        params["hyde_mode"] = source["default_hyde_mode"]
+    if "query_decomposition_mode" not in params and source.get("default_query_decomposition_mode"):
+        params["query_decomposition_mode"] = source["default_query_decomposition_mode"]
+
+    import time
+    start = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(retrieve_url, json=params, timeout=30.0)
+            resp.raise_for_status()
+        data = resp.json()
+        elapsed = round((time.monotonic() - start) * 1000)
+        results = data.get("results", [])
+        return {"results": results, "total": len(results), "latency_ms": elapsed}
+    except httpx.ConnectError:
+        return JSONResponse(status_code=502, content={"error": "检索服务不可达"})
+    except httpx.TimeoutException:
+        return JSONResponse(status_code=504, content={"error": "检索服务超时（30s）"})
+    except httpx.HTTPStatusError as e:
+        return JSONResponse(status_code=502, content={"error": f"检索服务返回 {e.response.status_code}"})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@router.post("/knowledge/vector-sources/{source_id}/qa")
+async def vector_qa(source_id: str, body: dict):
+    """向量知识库问答 — 检索 + LLM 综合回答。"""
+    source = _find_vector_source(source_id)
+    if source is None:
+        return JSONResponse(status_code=404, content={"error": "向量知识库不存在"})
+
+    query = body.get("query", "")
+    if not query:
+        return {"answer": "请输入问题", "chunks": [], "processing_time_ms": 0}
+
+    # 1. 调用 retrieve 获取上下文
+    import time
+    start = time.monotonic()
+    retrieve_resp = await vector_retrieve(source_id, body)
+
+    # retrieve 可能返回 JSONResponse（错误情况）
+    if isinstance(retrieve_resp, JSONResponse):
+        return {
+            "answer": "检索服务异常，请检查知识库配置和联通状态。",
+            "chunks": [],
+            "processing_time_ms": round((time.monotonic() - start) * 1000),
+        }
+
+    chunks = retrieve_resp.get("results", [])
+    if not chunks:
+        return {
+            "answer": "未检索到相关内容，请尝试更换关键词或调整检索参数。",
+            "chunks": [],
+            "processing_time_ms": round((time.monotonic() - start) * 1000),
+        }
+
+    # 2. 构建上下文 + LLM 生成回答
+    context_parts = []
+    for i, c in enumerate(chunks[:10], 1):
+        src = c.get("source", "未知来源")
+        title = c.get("title", "")
+        score = c.get("score", 0)
+        text = c.get("text", "")
+        context_parts.append(f"[片段{i}] 来源: {src} | 章节: {title} | 相关度: {score:.3f}\n{text}")
+    context = "\n\n---\n\n".join(context_parts)
+
+    system_prompt = (
+        "你是燃气轮机智能运维专家。请基于以下从向量知识库中检索到的片段回答用户问题。\n"
+        "要求：\n"
+        "1. 综合所有相关片段给出准确、完整的回答\n"
+        "2. 在回答中标注信息来源（如「根据《xxx》文档...」）\n"
+        "3. 如果片段内容不足以回答问题，请明确指出\n"
+        "4. 使用 markdown 格式组织回答"
+    )
+    user_message = f"检索到的知识库片段：\n\n{context}\n\n---\n\n用户问题：{query}"
+
+    try:
+        from src.config import get_settings
+        from langchain_openai import ChatOpenAI
+        from langchain_core.messages import SystemMessage, HumanMessage
+
+        settings = get_settings()
+        llm = ChatOpenAI(
+            base_url=settings.active_llm_base_url,
+            api_key=settings.active_llm_api_key,
+            model=settings.active_llm_model_name,
+            temperature=0.3,
+            timeout=120,
+            max_retries=1,
+        )
+        response = await llm.ainvoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_message),
+        ])
+        answer = response.content
+    except Exception as e:
+        # LLM 不可用时，直接返回检索片段摘要
+        answer = "LLM 服务暂不可用，以下为检索到的原始片段：\n\n"
+        for i, c in enumerate(chunks[:5], 1):
+            answer += f"**{i}. {c.get('title', '未知标题')}** (来源: {c.get('source', '未知')})\n"
+            answer += c.get("text", "")[:300] + "...\n\n"
+        answer += f"\n*[LLM 错误: {str(e)}]*"
+
+    elapsed = round((time.monotonic() - start) * 1000)
+    return {"answer": answer, "chunks": chunks, "processing_time_ms": elapsed}
 
 
 @router.get("/knowledge/causal-graph")
@@ -523,6 +707,26 @@ async def get_raw_file(request: Request, filename: str):
     return FR(fpath, filename=os.path.basename(filename))
 
 
+@router.get("/assets/{filename:path}")
+async def get_asset_image(request: Request, filename: str):
+    """提供知识库图片资源（knowledge/raw/assets/）。"""
+    from fastapi.responses import FileResponse as FR
+
+    wiki_mgr = _get_wiki_manager(request)
+    assets_dir = os.path.join(wiki_mgr.raw_dir, "assets")
+    fpath = os.path.join(assets_dir, filename)
+    if not os.path.isfile(fpath):
+        return JSONResponse(status_code=404, content={"error": "图片不存在", "filename": filename})
+    ext = os.path.splitext(filename)[1].lower()
+    media_types = {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".gif": "image/gif", ".svg": "image/svg+xml",
+        ".webp": "image/webp",
+    }
+    media_type = media_types.get(ext)
+    return FR(fpath, media_type=media_type)
+
+
 # =========================================================================
 # Wiki 知识图谱
 # =========================================================================
@@ -604,3 +808,11 @@ async def get_wiki_graph(request: Request):
         node["degree"] = degree.get(node["id"], 0)
 
     return {"nodes": nodes, "edges": edges}
+
+
+@router.post("/knowledge/wiki/backfill-images")
+async def backfill_wiki_images(request: Request):
+    """为现有 wiki 词条补录关联图片引用。"""
+    wiki_mgr = _get_wiki_manager(request)
+    result = wiki_mgr.backfill_images()
+    return result

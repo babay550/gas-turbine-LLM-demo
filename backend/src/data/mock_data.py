@@ -275,6 +275,74 @@ def generate_loss_analysis() -> dict:
     }
 
 
+def generate_period_loss_analysis(parameter_keys: list[str], start: str, end: str, unit_id: str = "GT-01") -> dict:
+    """基于指定参数 key 列表和时间范围生成耗差分析结果。
+
+    每个参数 key 对应一个损失项：
+    - value (当前值) = 基于 normal_range 模拟的偏差值
+    - design (设计值) = normal_range 中间值的 10% 作为基准损失
+    - best  (最优值)  = normal_range 中间值的 5% 作为最优损失
+    """
+    from src.api.routes.dictionary import PARAMETERS
+
+    # 建立 key -> 参数定义 映射
+    param_map: dict[str, dict] = {}
+    for p in PARAMETERS:
+        key = p["name"].replace(" ", "_")
+        param_map[key] = p
+        # 也支持直接用 name 查找
+        param_map[p["name"]] = p
+
+    items: list[dict] = []
+    for pk in parameter_keys:
+        pdef = param_map.get(pk)
+        if not pdef:
+            # 无法匹配的参数用随机值
+            items.append({
+                "name": pk,
+                "value": round(random.uniform(0.5, 3.0), 2),
+                "design": round(random.uniform(0.3, 1.5), 2),
+                "unit": "%",
+            })
+            continue
+
+        nr = pdef.get("normal_range", [0, 1])
+        rng_span = nr[1] - nr[0] if nr and len(nr) == 2 else 1
+        mid = (nr[0] + nr[1]) / 2 if nr and len(nr) == 2 else 1
+
+        # 模拟偏差：当前值比设计值偏大 (损失方向)
+        design_val = round(rng_span * 0.10, 4)
+        best_val = round(rng_span * 0.05, 4)
+        current_val = round(design_val * random.uniform(0.8, 2.2), 4)
+
+        items.append({
+            "name": pdef["name"],
+            "value": current_val,
+            "design": design_val,
+            "best": best_val,
+            "unit": pdef.get("unit", ""),
+        })
+
+    total_loss = round(sum(i["value"] for i in items), 4)
+    total_design = round(sum(i["design"] for i in items), 4)
+    total_best = round(sum(i.get("best", i["design"] * 0.7) for i in items), 4)
+
+    return {
+        "analysis_time": datetime.now().isoformat(),
+        "unit_id": unit_id,
+        "period": {"start": start, "end": end},
+        "total_loss": total_loss,
+        "total_design_loss": total_design,
+        "total_best_loss": total_best,
+        "items": items,
+        "major_losses": sorted(
+            [i for i in items if i["value"] > i["design"] * 1.2],
+            key=lambda x: x["value"] - x["design"],
+            reverse=True,
+        ),
+    }
+
+
 def generate_benchmark_analysis() -> dict:
     """生成对标分析结果。"""
     indicators = [

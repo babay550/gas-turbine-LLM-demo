@@ -1,10 +1,24 @@
-"""数据字典 API — 参数定义、基准值配置、对标指标。"""
+"""数据字典 API — 参数定义、基准值配置、对标指标。
 
-from fastapi import APIRouter
+从 v1.8 起所有数据从 SQLite 数据库读写，首次启动自动 seed。
+"""
 
+import json
+import logging
+from datetime import datetime
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from src.db.engine import get_session
+from src.db.models import Parameter, BaselineConfig, BenchmarkIndicator, LossVariableConfig, WaterfallConfig
+
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Mock 数据字典 — 与 SCADA 监测参数完全同步
+# ──────────── 旧硬编码数据（仅用于首次 seed） ────────────
+# 保留原列表供 engine.py 的 _seed_if_empty() 使用
+
 PARAMETERS = [
     # === 压气机 ===
     {"id": "P001", "name": "压气机进口温度 T1", "unit": "°C", "location": "压气机进口", "normal_range": [10, 40], "source": "时序数据库", "update_freq": "1s"},
@@ -62,19 +76,229 @@ BENCHMARK_INDICATORS = [
 ]
 
 
+# ──────────── 请求模型 ────────────
+
+class ParameterCreate(BaseModel):
+    name: str
+    unit: str
+    subsystem: str = "其他"
+    location: str = ""
+    normal_min: float | None = None
+    normal_max: float | None = None
+    source: str = "时序数据库"
+    update_freq: str = "1s"
+    description: str = ""
+
+
+class ParameterUpdate(BaseModel):
+    name: str | None = None
+    unit: str | None = None
+    subsystem: str | None = None
+    location: str | None = None
+    normal_min: float | None = None
+    normal_max: float | None = None
+    source: str | None = None
+    update_freq: str | None = None
+    description: str | None = None
+
+
+# ──────────── 参数 CRUD ────────────
+
 @router.get("/parameters")
 async def get_parameters():
     """获取监测参数定义列表。"""
-    return {"parameters": PARAMETERS, "total": len(PARAMETERS)}
+    with get_session() as session:
+        params = session.query(Parameter).order_by(Parameter.id).all()
+        result = [p.to_dict() for p in params]
+        return {"parameters": result, "total": len(result)}
 
+
+@router.post("/parameters")
+async def create_parameter(data: ParameterCreate):
+    """新增监测参数。"""
+    with get_session() as session:
+        # 生成 ID
+        max_id = session.query(Parameter).order_by(Parameter.id.desc()).first()
+        next_num = (int(max_id.id[1:]) + 1) if max_id else 1
+        new_id = f"P{next_num:03d}"
+        key = data.name.replace(" ", "_")
+
+        param = Parameter(
+            id=new_id,
+            name=data.name,
+            key=key,
+            unit=data.unit,
+            subsystem=data.subsystem,
+            location=data.location,
+            normal_min=data.normal_min,
+            normal_max=data.normal_max,
+            source=data.source,
+            update_freq=data.update_freq,
+            description=data.description,
+        )
+        session.add(param)
+        session.commit()
+        return {"success": True, "id": new_id, "message": f"参数 {data.name} 已添加"}
+
+
+@router.put("/parameters/{param_id}")
+async def update_parameter(param_id: str, data: ParameterUpdate):
+    """修改监测参数。"""
+    with get_session() as session:
+        param = session.query(Parameter).filter(Parameter.id == param_id).first()
+        if not param:
+            raise HTTPException(404, "参数不存在")
+        update_data = data.model_dump(exclude_unset=True)
+        for k, v in update_data.items():
+            setattr(param, k, v)
+        if "name" in update_data:
+            param.key = update_data["name"].replace(" ", "_")
+        param.updated_at = datetime.now()
+        session.commit()
+        return {"success": True, "message": "参数已更新"}
+
+
+@router.delete("/parameters/{param_id}")
+async def delete_parameter(param_id: str):
+    """删除监测参数。"""
+    with get_session() as session:
+        param = session.query(Parameter).filter(Parameter.id == param_id).first()
+        if not param:
+            raise HTTPException(404, "参数不存在")
+        session.delete(param)
+        session.commit()
+        return {"success": True, "message": "参数已删除"}
+
+
+# ──────────── 基准值配置 CRUD ────────────
 
 @router.get("/baselines")
 async def get_baselines():
     """获取动态基准值模型配置。"""
-    return {"baselines": BASELINE_CONFIGS, "total": len(BASELINE_CONFIGS)}
+    with get_session() as session:
+        configs = session.query(BaselineConfig).all()
+        result = [bc.to_dict() for bc in configs]
+        return {"baselines": result, "total": len(result)}
 
+
+# ──────────── 对标指标 CRUD ────────────
 
 @router.get("/benchmark-indicators")
 async def get_benchmark_indicators():
     """获取对标指标配置。"""
-    return {"indicators": BENCHMARK_INDICATORS, "total": len(BENCHMARK_INDICATORS)}
+    with get_session() as session:
+        indicators = session.query(BenchmarkIndicator).order_by(BenchmarkIndicator.id).all()
+        result = [bi.to_dict() for bi in indicators]
+        return {"indicators": result, "total": len(result)}
+
+
+# ──────────── 损失项配置 CRUD ────────────
+
+class LossVariableCreate(BaseModel):
+    param_key: str
+    name: str
+    unit: str
+    baseline: float
+    best: float
+
+
+class LossVariableUpdate(BaseModel):
+    param_key: str | None = None
+    name: str | None = None
+    unit: str | None = None
+    baseline: float | None = None
+    best: float | None = None
+    sort_order: int | None = None
+
+
+@router.get("/loss-variables")
+async def get_loss_variables():
+    """获取所有损失项配置。"""
+    with get_session() as session:
+        items = session.query(LossVariableConfig).order_by(LossVariableConfig.sort_order, LossVariableConfig.id).all()
+        return {"variables": [i.to_dict() for i in items], "total": len(items)}
+
+
+@router.post("/loss-variables")
+async def create_loss_variable(data: LossVariableCreate):
+    """新增损失项配置。"""
+    with get_session() as session:
+        max_order = session.query(LossVariableConfig).order_by(LossVariableConfig.sort_order.desc()).first()
+        next_order = (max_order.sort_order + 1) if max_order else 0
+        item = LossVariableConfig(
+            param_key=data.param_key,
+            name=data.name,
+            unit=data.unit,
+            baseline=data.baseline,
+            best=data.best,
+            sort_order=next_order,
+        )
+        session.add(item)
+        session.commit()
+        session.refresh(item)
+        return {"success": True, "id": item.id, "variable": item.to_dict()}
+
+
+@router.put("/loss-variables/{item_id}")
+async def update_loss_variable(item_id: int, data: LossVariableUpdate):
+    """更新损失项配置。"""
+    with get_session() as session:
+        item = session.query(LossVariableConfig).filter(LossVariableConfig.id == item_id).first()
+        if not item:
+            raise HTTPException(404, "损失项不存在")
+        update_data = data.model_dump(exclude_unset=True)
+        for k, v in update_data.items():
+            setattr(item, k, v)
+        item.updated_at = datetime.now()
+        session.commit()
+        session.refresh(item)
+        return {"success": True, "variable": item.to_dict()}
+
+
+@router.delete("/loss-variables/{item_id}")
+async def delete_loss_variable(item_id: int):
+    """删除损失项配置。"""
+    with get_session() as session:
+        item = session.query(LossVariableConfig).filter(LossVariableConfig.id == item_id).first()
+        if not item:
+            raise HTTPException(404, "损失项不存在")
+        session.delete(item)
+        session.commit()
+        return {"success": True, "message": "损失项已删除"}
+
+
+# ──────────── 瀑布图配置 ────────────
+
+class WaterfallConfigUpdate(BaseModel):
+    total_key: str = ""
+    subsystem_keys: list[str] = []
+
+
+@router.get("/waterfall-config")
+async def get_waterfall_config():
+    """获取瀑布图全局配置。"""
+    with get_session() as session:
+        config = session.query(WaterfallConfig).first()
+        if not config:
+            return {"total_key": "", "subsystem_keys": []}
+        return config.to_dict()
+
+
+@router.put("/waterfall-config")
+async def save_waterfall_config(data: WaterfallConfigUpdate):
+    """保存瀑布图全局配置。"""
+    with get_session() as session:
+        config = session.query(WaterfallConfig).first()
+        if not config:
+            config = WaterfallConfig(
+                total_key=data.total_key,
+                subsystem_keys=json.dumps(data.subsystem_keys, ensure_ascii=False),
+            )
+            session.add(config)
+        else:
+            config.total_key = data.total_key
+            config.subsystem_keys = json.dumps(data.subsystem_keys, ensure_ascii=False)
+            config.updated_at = datetime.now()
+        session.commit()
+        session.refresh(config)
+        return {"success": True, "config": config.to_dict()}
