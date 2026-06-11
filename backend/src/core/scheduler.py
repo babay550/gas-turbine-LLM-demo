@@ -23,13 +23,26 @@ class Scheduler:
             agent = next(iter(self._agents.values()))
             return {"agent": agent.name, **agent.run(query)}
 
-        # TODO: 多 Agent 路由逻辑
-        # 关键词匹配：运维相关 → maintenance_agent，优化相关 → optimization_agent
-        optimization_keywords = ["能效", "效率", "耗差", "对标", "优化", "热耗", "厂用电", "负荷"]
-        if any(kw in query for kw in optimization_keywords):
-            agent = self._agents.get("optimization_agent")
+        # 路由关键词集合（按优先级）
+        root_keywords = ["原因", "为什么", "故障", "异常", "诊断", "根因", "排查"]
+        analysis_keywords = ["能效", "效率", "耗差", "对标", "优化", "热耗", "厂用电", "负荷", "损失", "趋势", "性能"]
+        wiki_keywords = ["规程", "检修", "操作规范", "设备参数", "技术标准", "手册", "处理方案", "水洗", "清洗", "维护", "保养", "清洁", "工艺", "方法", "步骤", "压气机", "燃烧室", "透平", "余热锅炉", "是什么", "怎么办", "建议"]
+
+        q = query.lower()
+
+        if any(kw in q for kw in root_keywords):
+            agent = self._agents.get("root_cause_agent")
+        elif any(kw in q for kw in analysis_keywords):
+            agent = self._agents.get("analysis_agent")
+        elif any(kw in q for kw in wiki_keywords):
+            agent = self._agents.get("wiki_agent")
         else:
-            agent = next(iter(self._agents.values()))
+            # 兜底：若包含常见设备名但未匹配到其他规则，也路由到知识库
+            equipment_terms = ["压气机", "燃烧室", "透平", "余热锅炉", "汽轮机", "发电机", "轴承"]
+            if any(e in q for e in equipment_terms):
+                agent = self._agents.get("wiki_agent")
+            else:
+                agent = self._agents.get("chat_agent") or next(iter(self._agents.values()))
 
         if agent is None:
             return {"error": "无可用的 Agent"}
