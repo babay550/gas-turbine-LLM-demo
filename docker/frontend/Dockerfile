@@ -16,7 +16,7 @@ COPY frontend/vite.config.ts ./
 COPY frontend/tsconfig*.json ./
 COPY frontend/package.json ./
 
-RUN npm run build
+RUN npx vite build
 
 # ============================================================
 # 第二阶段：运行阶段
