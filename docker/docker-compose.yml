@@ -1,3 +1,4 @@
+name: gas-turbine
 services:
   backend:
     image: gas-turbine-backend:v1.0
