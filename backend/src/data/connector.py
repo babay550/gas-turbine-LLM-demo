@@ -11,9 +11,34 @@ from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# ── 调试用：运行时 mock 覆盖（不写入配置，重启后失效） ──
+_mock_override: bool | None = None  # None=跟随配置, True=强制mock, False=强制real
+
+
+def set_mock_override(force_mock: bool | None) -> None:
+    """设置运行时 mock 覆盖。
+
+    - True  → 所有数据源强制返回 mock
+    - False → 所有数据源强制走 real
+    - None  → 恢复跟随 config.data_mode
+    """
+    global _mock_override
+    _mock_override = force_mock
+
+
+def get_mock_override() -> bool | None:
+    return _mock_override
+
+
+def is_mock_active() -> bool:
+    """当前是否使用 mock 数据（综合配置 + 运行时覆盖）。"""
+    if _mock_override is not None:
+        return _mock_override
+    return get_settings().data_mode != "real"
+
 
 def _is_real_mode() -> bool:
-    return get_settings().data_mode == "real"
+    return not is_mock_active()
 
 
 # ──────────── 实时数据 ────────────
@@ -145,7 +170,13 @@ def get_efficiency_analysis() -> dict:
 
 
 def get_loss_analysis() -> dict:
-    """调用耗差分析小模型。"""
+    """耗差分析：基于系统上报的 coalLossValue 做偏差分解（实时取最新点）。
+
+    force-mock 模式回退 mock_data；否则转发 loss_analysis_tool.run_loss_analysis。
+    """
+    if _is_real_mode():
+        from src.tools.loss_analysis_tool import run_loss_analysis
+        return run_loss_analysis("GT-01")
     from src.data.mock_data import generate_loss_analysis
     return generate_loss_analysis()
 
@@ -155,95 +186,3 @@ def get_benchmark_analysis() -> dict:
     from src.data.mock_data import generate_benchmark_analysis
     return generate_benchmark_analysis()
 
-
-def get_period_loss_analysis(parameter_keys: list[str], start: str, end: str, unit_id: str = "GT-01") -> dict:
-    """基于时间段历史数据生成耗差分析结果。"""
-    if _is_real_mode():
-        return _get_period_loss_from_db(parameter_keys, start, end, unit_id)
-    return _get_period_loss_mock(parameter_keys, start, end, unit_id)
-
-
-def _get_period_loss_mock(parameter_keys: list[str], start: str, end: str, unit_id: str) -> dict:
-    from src.data.mock_data import generate_period_loss_analysis
-    return generate_period_loss_analysis(parameter_keys, start, end, unit_id)
-
-
-def _get_period_loss_from_db(parameter_keys: list[str], start: str, end: str, unit_id: str) -> dict:
-    """从数据库查询指定时间段的参数统计，生成耗差分析。
-
-    逻辑：
-    1. 读取 LossVariableConfig 获取已配置损失项的基准值/最优值
-    2. 对每个选中的参数，取时间段内的真实均值作为当前值
-    3. 如果参数在 LossVariableConfig 中有配置，使用配置的 baseline/best
-    4. 如果参数没有配置，从 Parameter 表获取正常范围作为参考
-    """
-    try:
-        from src.services.query_service import get_multi_parameter_stats
-        from src.db.engine import get_session
-        from src.db.models import Parameter, LossVariableConfig
-
-        stats = get_multi_parameter_stats(parameter_keys, start, end, unit_id)
-
-        with get_session() as session:
-            params = session.query(Parameter).all()
-            param_map = {p.key: p for p in params}
-            loss_configs = session.query(LossVariableConfig).all()
-            loss_config_map = {c.param_key: c for c in loss_configs}
-
-        items = []
-        for s in stats:
-            if not s.get("has_data", True):
-                continue
-            pk = s.get("parameter_key", "")
-            p = param_map.get(pk)
-            cfg = loss_config_map.get(pk)
-            mean_val = s.get("mean") or 0
-
-            if cfg:
-                # 有损失项配置 → 使用配置的 baseline/best，真实均值作为当前值
-                name = cfg.name
-                unit = cfg.unit
-                baseline = cfg.baseline
-                best = cfg.best
-            else:
-                # 无配置 → 使用参数字典信息
-                name = p.name if p else pk
-                unit = p.unit if p else ""
-                # 基准值用正常范围中点，最优值用正常范围上限（代表理想状态）
-                if p and p.normal_min is not None and p.normal_max is not None:
-                    baseline = round((p.normal_min + p.normal_max) / 2, 4)
-                    best = round(p.normal_max, 4)
-                else:
-                    baseline = round(mean_val, 4)
-                    best = round(mean_val * 0.95, 4)
-
-            items.append({
-                "name": name,
-                "value": round(mean_val, 4),
-                "design": round(baseline, 4),
-                "best": round(best, 4),
-                "unit": unit,
-                "param_key": pk,
-            })
-
-        total_loss = round(sum(i["value"] for i in items), 4)
-        total_design = round(sum(i["design"] for i in items), 4)
-        total_best = round(sum(i["best"] for i in items), 4)
-
-        return {
-            "analysis_time": datetime.now().isoformat(),
-            "unit_id": unit_id,
-            "period": {"start": start, "end": end},
-            "total_loss": total_loss,
-            "total_design_loss": total_design,
-            "total_best_loss": total_best,
-            "items": items,
-            "major_losses": sorted(
-                [i for i in items if i["value"] > i["design"] * 1.2],
-                key=lambda x: x["value"] - x["design"],
-                reverse=True,
-            ),
-        }
-    except Exception as e:
-        logger.error("从数据库获取时段耗差分析失败，回退 mock: %s", e)
-        return _get_period_loss_mock(parameter_keys, start, end, unit_id)

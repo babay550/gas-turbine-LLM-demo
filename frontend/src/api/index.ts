@@ -99,6 +99,18 @@ http.interceptors.response.use(
 
 // ---- Monitoring ----
 
+export async function toggleMockMode(forceMock: boolean | null): Promise<{ mock_active: boolean; override: boolean | null; message: string }> {
+  const res = await http.post<{ mock_active: boolean; override: boolean | null; message: string }>('/monitoring/mock-toggle', {
+    force_mock: forceMock,
+  })
+  return res.data
+}
+
+export async function getMockStatus(): Promise<{ mock_active: boolean; override: boolean | null }> {
+  const res = await http.get<{ mock_active: boolean; override: boolean | null }>('/monitoring/mock-status')
+  return res.data
+}
+
 export async function getRealtimeData(): Promise<RealtimeData> {
   const res = await http.get<RealtimeData>('/monitoring/realtime')
   return res.data
@@ -118,8 +130,8 @@ export async function runEfficiencyAnalysis(): Promise<AnalysisResponse<Efficien
   return res.data
 }
 
-export async function runLossAnalysis(aggregation: string = 'raw'): Promise<AnalysisResponse<LossAnalysisResult>> {
-  const res = await http.post<AnalysisResponse<LossAnalysisResult>>('/analysis/loss', { aggregation })
+export async function runLossAnalysis(aggregation: string = 'raw', mode: string = 'coal'): Promise<AnalysisResponse<LossAnalysisResult>> {
+  const res = await http.post<AnalysisResponse<LossAnalysisResult>>('/analysis/loss', { aggregation, mode })
   return res.data
 }
 
@@ -128,23 +140,65 @@ export async function runBenchmarkAnalysis(): Promise<AnalysisResponse<Benchmark
   return res.data
 }
 
-export async function runDecomposition(): Promise<DecompositionResult> {
-  const res = await http.post<DecompositionResult>('/analysis/decomposition')
+export async function runDecomposition(mode: string = 'coal', aggregation: string = 'raw'): Promise<DecompositionResult> {
+  const res = await http.post<DecompositionResult>('/analysis/decomposition', { mode, aggregation })
   return res.data
 }
 
-export async function runPeriodLossAnalysis(params: {
-  parameter_keys: string[]
+// 历史偏差分解分析（直接调用 loss_analysis_tool）
+export async function runHistoricalLossAnalysis(params: {
   start: string
   end: string
   unit_id?: string
-}): Promise<AnalysisResponse<LossAnalysisResult>> {
-  const res = await http.post<AnalysisResponse<LossAnalysisResult>>('/analysis/period-loss', {
-    parameter_keys: params.parameter_keys,
-    start: params.start,
-    end: params.end,
-    unit_id: params.unit_id || 'GT-01',
-  })
+  aggregation?: string
+  mode?: string
+}): Promise<{ tool: string; result: any; error?: string }> {
+  const res = await http.post<{ tool: string; result: any; error?: string }>(
+    '/analysis/historical-loss',
+    {
+      start: params.start,
+      end: params.end,
+      unit_id: params.unit_id || 'GT-01',
+      aggregation: params.aggregation || '1h',
+      mode: params.mode || 'coal',
+    },
+    // 有负荷率时三区间分区需逐点查询，大数据量耗时，放宽超时
+    { timeout: 90000 },
+  )
+  return res.data
+}
+
+// 数据问答：后端综合 耗差分析 + 统计摘要 + 知识库 三源，由 LLM 作答
+export async function askAnalysis(params: {
+  message: string
+  start: string
+  end: string
+  unit_id?: string
+  stats?: any[]
+}): Promise<{ answer: string; loss_summary: any }> {
+  const res = await http.post<{ answer: string; loss_summary: any }>(
+    '/analysis/qa',
+    {
+      message: params.message,
+      start: params.start,
+      end: params.end,
+      unit_id: params.unit_id || 'GT-01',
+      stats: params.stats || [],
+    },
+    // 后端需执行 耗差分析 + 知识库检索 + LLM 生成，耗时远超默认 30s（与 sendMessage/wikiQA 对齐）
+    { timeout: 180000 },
+  )
+  return res.data
+}
+
+// 数据问答历史持久化（全局单一列表）
+export async function getQaHistory(): Promise<{ messages: Array<{ id: number; role: string; content: string; created_at: string }> }> {
+  const res = await http.get<{ messages: Array<{ id: number; role: string; content: string; created_at: string }> }>('/analysis/qa/history')
+  return res.data
+}
+
+export async function clearQaHistory(): Promise<{ success: boolean }> {
+  const res = await http.delete<{ success: boolean }>('/analysis/qa/history')
   return res.data
 }
 
@@ -257,6 +311,49 @@ export async function updateParameter(id: string, data: Record<string, unknown>)
 export async function deleteParameter(id: string): Promise<{ success: boolean }> {
   const res = await http.delete(`/dictionary/parameters/${encodeURIComponent(id)}`)
   return res.data
+}
+
+// ---- Parameter XLSX Template / Import / Export ----
+
+/** 下载参数字典 XLSX 模板 */
+export function downloadParameterTemplateUrl(): string {
+  return '/api/dictionary/parameters/template'
+}
+
+export async function downloadParameterTemplate(): Promise<void> {
+  const res = await http.get('/dictionary/parameters/template', { responseType: 'blob' })
+  _triggerBlobDownload(res.data, '数据字典模板.xlsx')
+}
+
+/** 上传 XLSX 批量导入参数 */
+export async function importParameters(file: File): Promise<{
+  success: boolean; imported: number; skipped: number; errors: string[]
+}> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await http.post('/dictionary/parameters/import', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 60000,
+  })
+  return res.data
+}
+
+/** 导出当前所有参数为 XLSX */
+export async function exportParameters(): Promise<void> {
+  const res = await http.get('/dictionary/parameters/export', { responseType: 'blob' })
+  _triggerBlobDownload(res.data, '数据字典导出.xlsx')
+}
+
+/** 触发浏览器下载 Blob */
+function _triggerBlobDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 
 export async function getBaselines(): Promise<BaselineListResponse> {

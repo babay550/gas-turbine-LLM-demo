@@ -44,7 +44,7 @@ def engine():
             cursor = dbapi_conn.cursor()
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA synchronous=NORMAL")
-            cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
+            cursor.execute("PRAGMA cache_size=-128000")  # 128MB cache
             cursor.execute("PRAGMA temp_store=MEMORY")
             cursor.close()
         logger.info("数据库引擎初始化完成: %s", db_path)
@@ -129,6 +129,26 @@ def _fix_sqlite_autoincrement():
         logger.warning("tsd_time_series 迁移检查跳过: %s", e)
 
 
+def _ensure_historical_qa_user_id():
+    """确保 tsd_historical_qa_messages 含 user_id 列（用户隔离）。
+
+    create_all 不会修改已存在的表；旧表（建表时无 user_id）通过 ALTER TABLE 补列。
+    """
+    try:
+        with engine().connect() as conn:
+            col_names = [c[1] for c in conn.execute(
+                text("PRAGMA table_info(tsd_historical_qa_messages)")
+            ).fetchall()]
+            if "user_id" not in col_names:
+                conn.execute(text(
+                    "ALTER TABLE tsd_historical_qa_messages ADD COLUMN user_id INTEGER"
+                ))
+                conn.commit()
+                logger.info("tsd_historical_qa_messages 增加 user_id 列（用户隔离）")
+    except Exception as e:
+        logger.warning("tsd_historical_qa_messages.user_id 迁移跳过: %s", e)
+
+
 def init_db():
     """创建所有表 + 首次 seed 数据。"""
     from src.db.models import Base
@@ -136,6 +156,7 @@ def init_db():
     import src.auth.models  # noqa: F401
     Base.metadata.create_all(bind=engine())
     _fix_sqlite_autoincrement()
+    _ensure_historical_qa_user_id()
     _seed_if_empty()
     _seed_auth_if_empty()
     logger.info("数据库表初始化完成")
@@ -155,20 +176,6 @@ def _seed_if_empty():
         # --- Seed 参数 ---
         from src.api.routes.dictionary import PARAMETERS, BASELINE_CONFIGS, BENCHMARK_INDICATORS
 
-        SUBSYSTEM_MAP = {
-            "P001": "压气机", "P002": "压气机", "P003": "压气机",
-            "P004": "压气机", "P005": "压气机",
-            "P006": "燃烧室", "P007": "燃烧室", "P008": "燃烧室",
-            "P009": "燃烧室", "P010": "燃烧室", "P011": "燃烧室",
-            "P012": "燃烧室", "P013": "燃烧室", "P014": "燃烧室",
-            "P015": "燃烧室",
-            "P016": "透平", "P017": "透平",
-            "P018": "发电机", "P019": "发电机",
-            "P020": "汽机", "P021": "汽机", "P022": "汽机", "P023": "汽机",
-            "P024": "余热锅炉", "P025": "余热锅炉", "P026": "余热锅炉", "P027": "余热锅炉",
-            "P028": "辅助", "P029": "辅助",
-        }
-
         for p in PARAMETERS:
             pid = p["id"]
             name = p["name"]
@@ -180,12 +187,13 @@ def _seed_if_empty():
                 name=name,
                 key=key,
                 unit=p.get("unit", ""),
-                subsystem=SUBSYSTEM_MAP.get(pid, "其他"),
+                subsystem=p.get("subsystem", "其他"),
                 location=p.get("location", ""),
                 normal_min=nr[0] if nr and len(nr) > 0 else None,
                 normal_max=nr[1] if nr and len(nr) > 1 else None,
                 source=p.get("source", "时序数据库"),
                 update_freq=p.get("update_freq", "1s"),
+                description=p.get("description") or "",
             )
             session.add(param)
 

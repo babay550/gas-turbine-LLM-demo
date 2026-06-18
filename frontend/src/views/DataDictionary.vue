@@ -3,7 +3,8 @@ import { ref, computed, onMounted, reactive } from 'vue'
 import * as api from '../api'
 import type { ParameterDefinition, BaselineConfig, BenchmarkIndicator } from '../types'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Edit } from '@element-plus/icons-vue'
+import { Delete, Edit, Download, Upload, Document } from '@element-plus/icons-vue'
+import type { UploadFile } from 'element-plus'
 
 const activeTab = ref('parameters')
 const loading = ref(false)
@@ -47,6 +48,10 @@ const showBenchmarkDialog = ref(false)
 const benchmarkForm = reactive({
   name: '', unit: '', source: '对标分析模型', peer_avg: 0,
 })
+
+// --- Parameter import ---
+const showImportDialog = ref(false)
+const importLoading = ref(false)
 
 async function loadParameters() {
   loading.value = true
@@ -163,6 +168,55 @@ function handleAddBenchmark() {
   ElMessage.success('对标指标已添加')
 }
 
+// ──── XLSX 模板导入/导出 ────
+
+async function handleDownloadTemplate() {
+  try {
+    await api.downloadParameterTemplate()
+    ElMessage.success('模板下载成功')
+  } catch (e: unknown) {
+    ElMessage.error('下载失败: ' + (e instanceof Error ? e.message : String(e)))
+  }
+}
+
+async function handleExportParameters() {
+  try {
+    await api.exportParameters()
+    ElMessage.success('导出成功')
+  } catch (e: unknown) {
+    ElMessage.error('导出失败: ' + (e instanceof Error ? e.message : String(e)))
+  }
+}
+
+function handleImportBeforeUpload(file: UploadFile) {
+  if (!file.name.endsWith('.xlsx') && !file.name.endsWith('.xls')) {
+    ElMessage.warning('请上传 .xlsx 文件')
+    return false
+  }
+  return true
+}
+
+async function handleImportUpload(options: { file: File }) {
+  importLoading.value = true
+  try {
+    const result = await api.importParameters(options.file)
+    if (result.errors && result.errors.length > 0) {
+      ElMessage.warning(`导入完成：新增 ${result.imported} 条，跳过 ${result.skipped} 条，${result.errors.length} 项有误`)
+      for (const err of result.errors.slice(0, 5)) {
+        console.warn('导入错误:', err)
+      }
+    } else {
+      ElMessage.success(`导入成功：新增 ${result.imported} 条参数，跳过 ${result.skipped} 条已存在项`)
+    }
+    showImportDialog.value = false
+    await loadParameters()
+  } catch (e: any) {
+    ElMessage.error('导入失败: ' + (e.response?.data?.detail || e.message || String(e)))
+  } finally {
+    importLoading.value = false
+  }
+}
+
 onMounted(async () => { await loadParameters() })
 </script>
 
@@ -177,6 +231,9 @@ onMounted(async () => { await loadParameters() })
                       style="width: 220px;" size="small" />
             <div>
               <el-button type="primary" size="small" @click="openAddParamDialog">添加参数</el-button>
+              <el-button size="small" :icon="Download" @click="handleDownloadTemplate">下载模板</el-button>
+              <el-button size="small" :icon="Upload" @click="showImportDialog = true">导入</el-button>
+              <el-button size="small" :icon="Document" @click="handleExportParameters">导出</el-button>
               <el-button size="small" @click="loadParameters">刷新</el-button>
             </div>
           </div>
@@ -258,7 +315,9 @@ onMounted(async () => { await loadParameters() })
         <el-form-item label="单位"><el-input v-model="paramForm.unit" placeholder="如 °C" /></el-form-item>
         <el-form-item label="子系统">
           <el-select v-model="paramForm.subsystem">
-            <el-option label="燃气轮机" value="燃气轮机" />
+            <el-option label="全厂" value="全厂" />
+            <el-option label="机组" value="机组" />
+            <el-option label="燃机" value="燃机" />
             <el-option label="压气机" value="压气机" />
             <el-option label="燃烧室" value="燃烧室" />
             <el-option label="透平" value="透平" />
@@ -315,6 +374,31 @@ onMounted(async () => { await loadParameters() })
       <template #footer>
         <el-button @click="showBenchmarkDialog = false">取消</el-button>
         <el-button type="primary" @click="handleAddBenchmark">确定</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Import Parameters Dialog -->
+    <el-dialog v-model="showImportDialog" title="批量导入参数" width="480px">
+      <div style="margin-bottom: 12px; color: #909399; font-size: 13px;">
+        请先下载模板，按格式填写后上传。已存在的参数（按名称匹配）会自动跳过。
+      </div>
+      <el-upload
+        drag
+        :auto-upload="false"
+        accept=".xlsx,.xls"
+        :limit="1"
+        :before-upload="handleImportBeforeUpload"
+        :on-change="(f: UploadFile) => f.raw && handleImportUpload({ file: f.raw })"
+        v-loading="importLoading"
+      >
+        <el-icon style="font-size: 32px; color: #c0c4cc;"><Upload /></el-icon>
+        <div style="color: #606266; margin-top: 8px;">将 .xlsx 文件拖到此处，或点击选择</div>
+      </el-upload>
+      <template #footer>
+        <el-button size="small" @click="handleDownloadTemplate">
+          <el-icon><Download /></el-icon> 下载模板
+        </el-button>
+        <el-button @click="showImportDialog = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>

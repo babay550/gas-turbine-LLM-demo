@@ -198,8 +198,11 @@ class WikiManager:
     # CRUD 操作
     # ------------------------------------------------------------------
 
-    def create_entry(self, frontmatter: dict, content: str) -> WikiEntry:
-        """创建新 wiki 词条，自动生成 ID 并写入文件。"""
+    def create_entry(self, frontmatter: dict, content: str, rebuild: bool = True) -> WikiEntry:
+        """创建新 wiki 词条，自动生成 ID 并写入文件。
+
+        rebuild=False 时跳过 index.md 重建，便于批量入库时在末尾统一重建一次。
+        """
         entry_id = self._next_id()
         now = datetime.now().strftime("%Y-%m-%d")
         frontmatter.setdefault("id", entry_id)
@@ -219,7 +222,8 @@ class WikiManager:
             f.write(text)
 
         entry = WikiEntry(frontmatter, content, fpath)
-        self.rebuild_index()
+        if rebuild:
+            self.rebuild_index()
         return entry
 
     def get_entry(self, entry_id: str) -> Optional[WikiEntry]:
@@ -232,8 +236,11 @@ class WikiManager:
         fm, body = self._parse_frontmatter(text)
         return WikiEntry(fm, body, fpath) if fm else None
 
-    def update_entry(self, entry_id: str, frontmatter_updates: dict, content: Optional[str] = None) -> Optional[WikiEntry]:
-        """更新 wiki 词条的 frontmatter 和/或正文。"""
+    def update_entry(self, entry_id: str, frontmatter_updates: dict, content: Optional[str] = None, rebuild: bool = True) -> Optional[WikiEntry]:
+        """更新 wiki 词条的 frontmatter 和/或正文。
+
+        rebuild=False 时跳过 index.md 重建，便于批量入库时在末尾统一重建一次。
+        """
         fpath = self._find_entry_file(entry_id)
         if not fpath:
             return None
@@ -249,7 +256,6 @@ class WikiManager:
             f.write(new_text)
 
         # 如果类型变了可能需要移动文件
-        old_type = text  # 旧文本中提取
         new_type = fm.get("type", "content_summary")
         new_dir = self._entry_dir(new_type)
         if os.path.dirname(fpath) != new_dir:
@@ -257,8 +263,41 @@ class WikiManager:
             os.rename(fpath, new_fpath)
             fpath = new_fpath
 
-        self.rebuild_index()
+        if rebuild:
+            self.rebuild_index()
         return WikiEntry(fm, new_content, fpath)
+
+    # ------------------------------------------------------------------
+    # 同实体匹配（增量合并用）
+    # ------------------------------------------------------------------
+
+    # 仅移除"型号类"括号：括号内含字母数字型号串或"型"字，如 （PG9371型）/（M701F型）
+    # 保留功能/位置类括号，如 （动叶）/（静叶），避免误合并
+    _MODEL_PAREN_RE = re.compile(r"[（(][^）()]*?(?:[A-Za-z0-9]{2,}|型)[^）()]*?[）)]")
+
+    @classmethod
+    def _normalize_title(cls, title: str) -> str:
+        """归一化标题用于"同实体"匹配：去型号括号 → 去首尾标点 → 折叠空白。"""
+        if not title:
+            return ""
+        t = cls._MODEL_PAREN_RE.sub("", title)
+        t = t.strip().strip("（）()【】[]《》<>「」\"\"''''·.,，。、；;：: -—_/")
+        t = re.sub(r"\s+", "", t)
+        return t.lower()
+
+    def find_entry_by_title(self, entry_type: str, title: str, candidates: Optional[list[WikiEntry]] = None) -> Optional[WikiEntry]:
+        """在已有词条中按 type + 归一化标题查找同实体词条。
+
+        candidates 可传入预先扫描好的列表，避免批量入库时反复扫描。
+        """
+        norm = self._normalize_title(title)
+        if not norm:
+            return None
+        entries = candidates if candidates is not None else self._scan_all_files()
+        for e in entries:
+            if e.type == entry_type and self._normalize_title(e.title) == norm:
+                return e
+        return None
 
     def delete_entry(self, entry_id: str) -> bool:
         """删除 wiki 词条。"""

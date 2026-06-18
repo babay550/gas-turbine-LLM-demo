@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.3
 
     # 数据模式
-    data_mode: str = "mock"  # mock | real
+    data_mode: str = "real"  # mock | real
 
     # 数据库配置
     database_path: str = "data/gasturbine.db"

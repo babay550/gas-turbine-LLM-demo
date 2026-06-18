@@ -92,11 +92,11 @@ export async function runEfficiency() {
   }
 }
 
-export async function runLoss(aggregation: string = 'raw') {
+export async function runLoss(aggregation: string = 'raw', mode: string = 'coal') {
   _analysis.loading = true
   _analysis.error = null
   try {
-    const res = await api.runLossAnalysis(aggregation)
+    const res = await api.runLossAnalysis(aggregation, mode)
     _analysis.loss = res.result
   } catch (e: unknown) {
     _analysis.error = e instanceof Error ? e.message : String(e)
@@ -118,11 +118,11 @@ export async function runBenchmark() {
   }
 }
 
-export async function runDecomposition() {
+export async function runDecomposition(mode: string = 'coal', aggregation: string = 'raw') {
   _analysis.loading = true
   _analysis.error = null
   try {
-    _analysis.decomposition = await api.runDecomposition()
+    _analysis.decomposition = await api.runDecomposition(mode, aggregation)
   } catch (e: unknown) {
     _analysis.error = e instanceof Error ? e.message : String(e)
   } finally {

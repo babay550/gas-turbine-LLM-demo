@@ -226,3 +226,22 @@ class WaterfallConfig(Base):
             "total_key": self.total_key or "",
             "subsystem_keys": json.loads(self.subsystem_keys) if self.subsystem_keys else [],
         }
+
+
+class HistoricalQAMessage(Base):
+    """历史分析-数据问答的持久化对话消息（按用户隔离）。"""
+    __tablename__ = "tsd_historical_qa_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=True)     # 关联 auth_users.id；NULL=迁移前历史
+    role = Column(String, nullable=False)        # user / assistant
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "role": self.role,
+            "content": self.content,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

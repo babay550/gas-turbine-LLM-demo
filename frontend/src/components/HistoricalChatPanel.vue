@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import type { ParameterStat } from '../types'
 import { renderMarkdown } from '../utils/markdown'
 
@@ -20,56 +21,66 @@ const messages = ref<LocalMessage[]>([])
 const messageListRef = ref<HTMLElement>()
 const loading = ref(false)
 
-function formatTime(d: Date): string {
+function toLocalISOString(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-function buildContext(): string {
-  const parts: string[] = ['[当前分析上下文]']
-  if (props.dateRange) {
-    parts.push(`时间范围: ${formatTime(props.dateRange[0])} ~ ${formatTime(props.dateRange[1])}`)
-  }
-  if (props.selectedParams.length > 0) {
-    const names = props.selectedParams.map(k => props.parameterNames[k] || k).join(', ')
-    parts.push(`已选参数: ${names}`)
-  }
-  if (props.stats.length > 0) {
-    const summaries = props.stats.slice(0, 5).map(s => {
-      const name = props.parameterNames[s.parameter_key] || s.parameter_key
-      return `${name}: 均值=${s.mean?.toFixed(2) ?? '-'}, 最小=${s.min?.toFixed(2) ?? '-'}, 最大=${s.max?.toFixed(2) ?? '-'}`
-    })
-    parts.push(`统计摘要: ${summaries.join('; ')}`)
-  }
-  return parts.join('\n')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 async function handleSend() {
   const text = inputText.value.trim()
   if (!text || loading.value) return
-  inputText.value = ''
 
+  if (!props.dateRange) {
+    ElMessage.warning('请先选择时间范围')
+    return
+  }
+
+  inputText.value = ''
   messages.value.push({ role: 'user', content: text })
   loading.value = true
 
-  // 注入上下文前缀
-  const context = buildContext()
-  const fullMessage = context ? `${context}\n\n用户问题: ${text}` : text
+  const [start, end] = props.dateRange
 
   try {
-    // 复用全局 chat store 的 sendChatMessage，但我们只关心回答文本
-    // 为避免污染全局 store，直接调用 API
+    // 后端先对该时段运行耗差分析，再基于结果由 LLM 作答
     const api = await import('../api')
-    const res = await api.sendMessage({ message: fullMessage })
+    const res = await api.askAnalysis({
+      message: text,
+      start: toLocalISOString(start),
+      end: toLocalISOString(end),
+      stats: props.stats,
+    })
     messages.value.push({ role: 'assistant', content: res.answer })
   } catch (e: any) {
-    messages.value.push({ role: 'assistant', content: `分析出错: ${e.message || e}` })
+    messages.value.push({ role: 'assistant', content: `分析出错: ${e.response?.data?.detail || e.message || e}` })
   } finally {
     loading.value = false
     await nextTick()
     if (messageListRef.value) {
       messageListRef.value.scrollTop = messageListRef.value.scrollHeight
     }
+  }
+}
+
+onMounted(async () => {
+  // 加载持久化的历史对话（全局单一列表）
+  try {
+    const api = await import('../api')
+    const res = await api.getQaHistory()
+    messages.value = (res.messages || []).map((m: any) => ({ role: m.role, content: m.content }))
+    await nextTick()
+    if (messageListRef.value) messageListRef.value.scrollTop = messageListRef.value.scrollHeight
+  } catch { /* ignore */ }
+})
+
+async function handleClear() {
+  try {
+    const api = await import('../api')
+    await api.clearQaHistory()
+    messages.value = []
+    ElMessage.success('已清空对话历史')
+  } catch (e: any) {
+    ElMessage.error('清空失败: ' + (e.message || e))
   }
 }
 
@@ -86,6 +97,7 @@ function handleKeydown(e: KeyboardEvent) {
     <div class="panel-header">
       <span class="panel-title">💬 数据问答</span>
       <span class="panel-hint">基于当前选中时间段和参数</span>
+      <el-button v-if="messages.length" link size="small" @click="handleClear" style="margin-left:auto;">清空历史</el-button>
     </div>
     <div ref="messageListRef" class="message-list">
       <div v-if="messages.length === 0" class="empty-hint">
