@@ -15,6 +15,7 @@ import {
   queryTimeSeries,
   getParameterStats,
   getParameters,
+  runHistoricalLossAnalysis,
 } from '../api'
 import type { TimeRangeInfo, ParameterStat, ParameterDefinition } from '../types'
 import HistoricalChatPanel from '../components/HistoricalChatPanel.vue'
@@ -43,23 +44,38 @@ const stats = ref<ParameterStat[]>([])
 const periodDays = ref(0)
 const pointCount = ref(0)
 
-// ────── 耗差分析结果 ──────
+// ────── 耗差分析结果（loss_analysis_tool 偏差分解） ──────
 
-interface PeriodLossItem {
-  name: string
-  value: number
-  design: number
-  best?: number
-  unit: string
+const lossResult = ref<any>(null)
+const lossLoading = ref(false)
+const lossMode = ref<'coal' | 'optimal'>('coal')
+
+function onLossModeChange() {
+  // 切换评估模式后，若已有结果则按新模式重新分析
+  if (lossResult.value && dateRange.value) handleLossAnalysis()
 }
 
-const lossResult = ref<{
-  total_loss: number
-  total_design_loss: number
-  total_best_loss: number
-  items: PeriodLossItem[]
-  major_losses: PeriodLossItem[]
-} | null>(null)
+const lossSummary = computed(() => {
+  if (!lossResult.value) return null
+  const r = lossResult.value
+  const total = r.total || {}
+  const zd = r.zone_distribution || null
+  return {
+    total_points: r.total_data_points,
+    has_loss: total.main_value != null,
+    main_value: total.main_value,
+    eval_mode: r.eval_mode || 'coal',
+    mode_label: r.eval_mode === 'optimal' ? '对标最优' : '对标基准',
+    subsystems: r.subsystems || [],
+    ranking: r.factor_ranking || [],
+    zone_strategy: r.zone_strategy,
+    zones: zd ? [
+      { id: 1, label: '极低负荷（<10%，已舍去）', color: '#909399', count: zd.zone1?.count ?? 0, ratio: zd.zone1?.ratio ?? 0, avg_load_rate: zd.zone1?.avg_load_rate ?? 0 },
+      { id: 2, label: '部分负荷（10%~60%）', color: '#e6a23c', count: zd.zone2?.count ?? 0, ratio: zd.zone2?.ratio ?? 0, avg_load_rate: zd.zone2?.avg_load_rate ?? 0 },
+      { id: 3, label: '高负荷（>60%）', color: '#f56c6c', count: zd.zone3?.count ?? 0, ratio: zd.zone3?.ratio ?? 0, avg_load_rate: zd.zone3?.avg_load_rate ?? 0 },
+    ] : null,
+  }
+})
 
 // ────── 参数名映射 ──────
 
@@ -296,50 +312,37 @@ async function handleQuery() {
   }
 }
 
-// ────── 耗差分析（直接基于统计摘要） ──────
+// ────── 耗差分析（直接调用 loss_analysis_tool 偏差分解） ──────
 
-function handleLossAnalysis() {
-  if (stats.value.length === 0) {
-    ElMessage.warning('请先查询数据，确保统计摘要已生成')
+async function handleLossAnalysis() {
+  if (!dateRange.value) {
+    ElMessage.warning('请先选择时间范围')
     return
   }
+  const [start, end] = dateRange.value
+  const startStr = toLocalISOString(start)
+  const endStr = toLocalISOString(end)
 
-  const items: PeriodLossItem[] = stats.value
-    .filter(s => s.has_data !== false)
-    .map(s => {
-      const mean = s.mean ?? 0
-      const nrMin = s.normal_min
-      const nrMax = s.normal_max
-
-      // 基准值：正常范围中点；最优值：正常范围上限（理想状态）
-      let baseline: number, best: number
-      if (nrMin != null && nrMax != null) {
-        baseline = +((nrMin + nrMax) / 2).toFixed(4)
-        best = +(nrMax).toFixed(4)
-      } else {
-        baseline = +(mean).toFixed(4)
-        best = +(mean * 0.95).toFixed(4)
-      }
-
-      return {
-        name: s.parameter_name || s.parameter_key,
-        unit: s.unit || '',
-        value: +(mean).toFixed(4),
-        design: baseline,
-        best,
-      }
+  lossLoading.value = true
+  try {
+    const res = await runHistoricalLossAnalysis({
+      start: startStr,
+      end: endStr,
+      unit_id: unitId.value,
+      aggregation: aggregation.value === 'raw' ? '1h' : aggregation.value,
+      mode: lossMode.value,
     })
-
-  lossResult.value = {
-    total_loss: +(items.reduce((s, i) => s + i.value, 0)).toFixed(4),
-    total_design_loss: +(items.reduce((s, i) => s + i.design, 0)).toFixed(4),
-    total_best_loss: +(items.reduce((s, i) => s + i.best, 0)).toFixed(4),
-    items,
-    major_losses: items
-      .filter(i => i.value > i.design * 1.2)
-      .sort((a, b) => (b.value - b.design) - (a.value - a.design)),
+    if (res.error) {
+      ElMessage.error(res.error)
+      return
+    }
+    lossResult.value = res.result
+    ElMessage.success('耗差分析完成')
+  } catch (e: any) {
+    ElMessage.error('耗差分析失败: ' + (e.response?.data?.detail || e.message || e))
+  } finally {
+    lossLoading.value = false
   }
-  ElMessage.success('耗差分析完成')
 }
 
 function formatValue(val: number | null) {
@@ -408,11 +411,16 @@ onMounted(async () => {
           <el-button
             type="warning"
             :icon="DataLine"
-            :disabled="stats.length === 0"
+            :loading="lossLoading"
+            :disabled="!dateRange"
             @click="handleLossAnalysis"
           >
             耗差分析
           </el-button>
+          <el-radio-group v-model="lossMode" size="small" @change="onLossModeChange" style="margin-left:8px;">
+            <el-radio-button value="coal">对标基准</el-radio-button>
+            <el-radio-button value="optimal">对标最优</el-radio-button>
+          </el-radio-group>
         </el-form-item>
       </el-form>
 
@@ -483,46 +491,91 @@ onMounted(async () => {
           <template #header>
             <div style="display:flex; align-items:center; justify-content:space-between;">
               <span style="font-weight:600">耗差分析结果</span>
-              <span style="font-size:13px; color:#606266;">
-                总损失: <strong style="color:#f56c6c;">{{ lossResult.total_loss?.toFixed(2) }}</strong>
-                (基准: {{ lossResult.total_design_loss?.toFixed(2) }},
-                最优: {{ lossResult.total_best_loss?.toFixed(2) }})
-              </span>
+              <span style="font-size:12px; color:#909399;">耗时 {{ lossResult.elapsed_ms }}ms · {{ lossResult.total_data_points }} 个数据点</span>
             </div>
           </template>
-          <el-table :data="lossResult.items" size="small" stripe>
-            <el-table-column prop="name" label="损失项" min-width="160" />
-            <el-table-column prop="unit" label="单位" width="70" align="center" />
-            <el-table-column prop="value" label="当前值" width="90" align="center">
-              <template #default="{ row }">{{ row.value?.toFixed(4) }}</template>
-            </el-table-column>
-            <el-table-column prop="design" label="基准值" width="90" align="center">
-              <template #default="{ row }">{{ row.design?.toFixed(4) }}</template>
-            </el-table-column>
-            <el-table-column prop="best" label="最优值" width="90" align="center">
-              <template #default="{ row }">{{ (row.best ?? row.design * 0.7)?.toFixed(4) }}</template>
-            </el-table-column>
-            <el-table-column label="vs 基准" width="90" align="center">
-              <template #default="{ row }">
-                <span :style="{ color: row.value > row.design ? '#f56c6c' : '#67c23a' }">
-                  {{ (row.value - row.design)?.toFixed(4) }}
-                </span>
-              </template>
-            </el-table-column>
-            <el-table-column label="vs 最优" width="90" align="center">
-              <template #default="{ row }">
-                <span :style="{ color: row.value > (row.best ?? row.design * 0.7) ? '#f56c6c' : '#67c23a' }">
-                  {{ (row.value - (row.best ?? row.design * 0.7))?.toFixed(4) }}
-                </span>
-              </template>
-            </el-table-column>
-          </el-table>
-          <div v-if="lossResult.major_losses?.length > 0" style="margin-top: 12px;">
-            <el-tag type="danger" size="small">主要损失项</el-tag>
-            <span v-for="ml in lossResult.major_losses" :key="ml.name" style="margin-left: 8px; font-size: 13px;">
-              {{ ml.name }} ({{ ml.value?.toFixed(2) }})
-            </span>
+
+          <el-alert
+            v-if="!lossSummary?.has_loss"
+            type="warning"
+            :closable="false"
+            show-icon
+            style="margin-top:4px;"
+          >
+            <template #title>该时段数据不含已算好的耗差值（coalLossValue），无法执行偏差分解</template>
+            <div style="margin-top:6px; font-size:13px; line-height:1.6;">
+              偏差分解需基于系统上报的「{因素}_coalLossValue」时序项。请确认导入数据包含这些耗差字段，或在「数据问答」中提问（将综合统计摘要与知识库作答）。
+            </div>
+          </el-alert>
+
+          <template v-else>
+          <!-- 关键汇总指标 -->
+          <el-row :gutter="12" style="margin-bottom:14px;">
+            <el-col :span="8" v-if="lossSummary?.main_value != null">
+              <div class="metric-card">
+                <div class="metric-label">综合能耗偏差（{{ lossSummary.mode_label }}）</div>
+                <div class="metric-value" :style="{color: lossSummary.main_value > 0 ? '#f56c6c' : '#67c23a'}">{{ lossSummary.main_value }}<small> g/kWh</small></div>
+              </div>
+            </el-col>
+            <el-col :span="8">
+              <div class="metric-card">
+                <div class="metric-label">评估模式</div>
+                <div class="metric-value" style="font-size:16px;">{{ lossSummary?.mode_label }}</div>
+              </div>
+            </el-col>
+            <el-col :span="8">
+              <div class="metric-card">
+                <div class="metric-label">分析数据点</div>
+                <div class="metric-value">{{ lossSummary?.total_points ?? 0 }}</div>
+              </div>
+            </el-col>
+          </el-row>
+
+          <!-- 负荷率区间分布 -->
+          <div v-if="lossSummary?.zones" style="margin-bottom:14px;">
+            <div style="font-size:13px; font-weight:600; margin-bottom:8px; color:#303133;">负荷率区间分布（按负荷率三区间）</div>
+            <div v-for="z in lossSummary.zones" :key="z.id" style="margin-bottom:6px;">
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:2px;">
+                <span>{{ z.label }}</span>
+                <span style="color:#909399;">{{ z.count }} 点（{{ z.ratio }}%），平均负荷 {{ z.avg_load_rate }}%</span>
+              </div>
+              <el-progress :percentage="z.ratio" :show-text="false" :color="z.color" />
+            </div>
           </div>
+
+          <!-- 子系统贡献分解 -->
+          <div v-if="lossSummary?.subsystems?.length" style="margin-bottom:14px;">
+            <div style="font-size:13px; font-weight:600; margin-bottom:8px; color:#303133;">子系统贡献分解</div>
+            <div v-for="s in lossSummary.subsystems" :key="s.name" style="margin-bottom:8px;">
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:2px;">
+                <span>{{ s.name }}</span>
+                <span :style="{color: s.main_value > 0 ? '#f56c6c' : '#67c23a'}">{{ s.main_value }} g/kWh（权重 {{ s.contribution_to_total }}%）</span>
+              </div>
+              <el-progress :percentage="s.contribution_to_total" :show-text="false" :color="s.main_value > 0 ? '#f56c6c' : '#67c23a'" />
+              <div v-if="s.factors?.length" style="font-size:11px; color:#909399; margin-top:2px;">
+                主要因素：<span v-for="(f, i) in s.factors.slice(0,3)" :key="f.name">{{ i > 0 ? '、' : '' }}{{ f.name }}({{ f.main_value }})</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 因素耗差排名 -->
+          <div v-if="lossSummary?.ranking?.length" style="margin-bottom:14px;">
+            <div style="font-size:13px; font-weight:600; margin-bottom:8px; color:#303133;">因素耗差排名（影响权重 Top 5）</div>
+            <el-table :data="lossSummary.ranking.slice(0,5)" size="small" border>
+              <el-table-column type="index" label="#" width="40" />
+              <el-table-column prop="name" label="因素" />
+              <el-table-column label="归属子系统" prop="subsystem" width="120" />
+              <el-table-column :label="lossSummary.mode_label + ' (g/kWh)'" width="160">
+                <template #default="{ row }">
+                  <span :style="{color: (row.main_value ?? 0) > 0 ? '#f56c6c' : '#67c23a'}">{{ row.main_value }}</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <!-- 文字报告 -->
+          <div class="loss-report">{{ lossResult.report }}</div>
+          </template>
         </el-card>
       </el-col>
 
@@ -559,5 +612,42 @@ onMounted(async () => {
 .historical-page {
   max-width: 1400px;
   margin: 0 auto;
+}
+
+.metric-card {
+  background: #f5f7fa;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.metric-label {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 4px;
+}
+
+.metric-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.metric-value small {
+  font-size: 12px;
+  font-weight: 400;
+  color: #909399;
+}
+
+.loss-report {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #fafafa;
+  border-left: 3px solid #409eff;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #303133;
+  max-height: 360px;
+  overflow-y: auto;
 }
 </style>

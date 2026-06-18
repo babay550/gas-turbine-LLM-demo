@@ -6,6 +6,7 @@ import { fetchRealtimeData, realtimeStore } from '../stores'
 import { runEfficiency, runLoss, runBenchmark, analysisStore } from '../stores'
 import { fetchWarnings, warningStore } from '../stores'
 import { fetchExecutionLogs, scheduleStore } from '../stores'
+import * as api from '../api'
 import {
   TrendCharts,
   DataAnalysis,
@@ -29,6 +30,33 @@ const metrics = ref([
 // Component detail drawer
 const drawerVisible = ref(false)
 const selectedComponent = ref<string | null>(null)
+
+// Mock toggle
+const mockActive = ref(false)
+
+async function handleMockToggle() {
+  const next = !mockActive.value
+  try {
+    const res = await api.toggleMockMode(next)
+    mockActive.value = res.mock_active
+    ElMessage.success(res.message)
+    // 重新加载数据
+    await fetchRealtimeData()
+    if (realtimeStore.data?.parameters) {
+      const params = realtimeStore.data.parameters
+      metrics.value[0].value = params['发电机有功功率'] ?? 0
+      metrics.value[0].delta = params['发电机有功功率'] ? params['发电机有功功率'] - 210 : 0
+      metrics.value[1].value = params['透平出口温度_T4'] ?? 0
+      metrics.value[1].delta = params['透平出口温度_T4'] ? params['透平出口温度_T4'] - 550 : 0
+      metrics.value[2].value = params['天然气瞬时流量'] ?? 0
+      metrics.value[2].delta = params['天然气瞬时流量'] ? params['天然气瞬时流量'] - 5.0 : 0
+      metrics.value[3].value = params['发电机有功功率'] ? Math.round(params['发电机有功功率'] / 220 * 1000) / 10 : 0
+      metrics.value[3].delta = params['发电机有功功率'] ? Math.round((params['发电机有功功率'] / 220 - 1) * 100) / 1 : 0
+    }
+  } catch (e: unknown) {
+    ElMessage.error('切换失败: ' + (e instanceof Error ? e.message : String(e)))
+  }
+}
 
 function handleComponentSelect(id: string) {
   selectedComponent.value = id
@@ -92,6 +120,12 @@ function logStatusType(status: string) {
 }
 
 onMounted(async () => {
+  // 查询当前 mock 状态
+  try {
+    const status = await api.getMockStatus()
+    mockActive.value = status.mock_active
+  } catch { /* ignore */ }
+
   await fetchRealtimeData()
   if (realtimeStore.data?.parameters) {
     const params = realtimeStore.data.parameters
@@ -137,7 +171,17 @@ onMounted(async () => {
       <template #header>
         <div style="display:flex;align-items:center;justify-content:space-between">
           <span style="font-weight: 600">燃机机组示意图</span>
-          <span style="font-size:12px;color:#909399">点击组件查看详情</span>
+          <div style="display:flex;align-items:center;gap:12px">
+            <el-switch
+              v-model="mockActive"
+              active-text="Mock数据"
+              inactive-text="Real数据"
+              inline-prompt
+              style="--el-switch-on-color: #e6a23c"
+              @change="handleMockToggle"
+            />
+            <span style="font-size:12px;color:#909399">点击组件查看详情</span>
+          </div>
         </div>
       </template>
       <GasTurbineCanvas @select="handleComponentSelect" />

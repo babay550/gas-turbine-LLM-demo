@@ -51,22 +51,49 @@ export interface AnalysisResponse<T = unknown> {
 
 // ---- Loss Analysis ----
 
-export interface LossItem {
+// ---- Loss Analysis（基于系统上报的已算好 coalLossValue 做偏差分解）----
+
+/** 耗差节点基础结构（总量 / 子系统 / 因素通用） */
+export interface LossNode {
   name: string
-  value: number
-  design: number
-  best?: number
-  unit?: string
+  coalLossValue: number | null
+  optimalLossValue: number | null
+  value?: number | null
+  referValue?: number | null
 }
 
+/** 因素节点（含子系统内权重） */
+export interface LossFactor extends LossNode {
+  contribution_to_subsystem: number
+}
+
+/** 子系统节点（含对总量权重 + 下属因素） */
+export interface LossSubsystem extends LossNode {
+  contribution_to_total: number
+  factors: LossFactor[]
+  factor_count: number
+}
+
+/** 因素排名项（扁平，含归属子系统） */
+export interface LossFactorRankItem extends LossNode {
+  subsystem: string
+}
+
+/** 耗差分析结果 = 偏差分解树（/analysis/loss、/analysis/historical-loss 的 result） */
 export interface LossAnalysisResult {
-  analysis_time: string
+  mode: 'historical' | 'realtime'
   unit_id: string
-  total_loss: number
-  total_design_loss: number
-  total_best_loss?: number
-  items: LossItem[]
-  major_losses: LossItem[]
+  period?: { start: string; end: string }
+  aggregation?: string
+  total_data_points: number
+  analysis_time: string
+  elapsed_ms: number
+  total: LossNode
+  subsystems: LossSubsystem[]
+  factor_ranking: LossFactorRankItem[]
+  key_findings: string[]
+  report: string
+  suggestions: string[]
 }
 
 // ---- Benchmark Analysis ----
@@ -91,21 +118,12 @@ export interface BenchmarkAnalysisResult {
 
 // ---- Decomposition Analysis ----
 
-export interface DecompositionComponent {
-  name: string
-  value: number
-  design: number
-}
-
-export interface DecompositionSubsystem {
-  contribution: number
-  components: DecompositionComponent[]
-}
-
 export interface DecompositionResult {
   total_loss: number
-  total_design_loss: number
-  subsystems: Record<string, DecompositionSubsystem>
+  total_optimal_loss: number
+  total: LossNode
+  subsystems: LossSubsystem[]
+  factor_ranking: LossFactorRankItem[]
 }
 
 // ---- Root Cause Analysis ----

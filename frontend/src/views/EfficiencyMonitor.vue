@@ -15,10 +15,12 @@ import { fetchEfficiencyTrend, realtimeStore } from '../stores'
 import { runEfficiency, analysisStore } from '../stores'
 import type { EfficiencyIndicator } from '../types'
 import { ElMessage } from 'element-plus'
+import * as api from '../api'
 
 use([CanvasRenderer, LineChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, DataZoomComponent])
 
 const loading = ref(false)
+const mockActive = ref(false)
 
 // --- SCADA raw value groups mapped to indicators ---
 interface ScadaField { key: string; label: string; unit: string }
@@ -195,7 +197,26 @@ async function handleRunAnalysis() {
   else if (analysisStore.error) ElMessage.error(analysisStore.error)
 }
 
+async function handleMockToggle() {
+  const next = !mockActive.value
+  try {
+    const res = await api.toggleMockMode(next)
+    mockActive.value = res.mock_active
+    ElMessage.success(res.message)
+    // 重新加载分析数据
+    await fetchEfficiencyTrend(7)
+    await handleRunAnalysis()
+  } catch (e: unknown) {
+    ElMessage.error('切换失败: ' + (e instanceof Error ? e.message : String(e)))
+  }
+}
+
 onMounted(async () => {
+  // 查询当前 mock 状态
+  try {
+    const status = await api.getMockStatus()
+    mockActive.value = status.mock_active
+  } catch { /* ignore */ }
   await fetchEfficiencyTrend(7)
   await handleRunAnalysis()
 })
@@ -206,6 +227,14 @@ onMounted(async () => {
     <!-- Top toolbar -->
     <div class="toolbar">
       <el-button type="primary" @click="handleRunAnalysis" :loading="loading">刷新分析</el-button>
+      <el-switch
+        v-model="mockActive"
+        active-text="Mock数据"
+        inactive-text="Real数据"
+        inline-prompt
+        style="--el-switch-on-color: #e6a23c; margin-left: 12px;"
+        @change="handleMockToggle"
+      />
       <span v-if="analysisStore.efficiency" class="update-time">
         更新: {{ analysisStore.efficiency.analysis_time?.slice(11, 19) }}
       </span>

@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 PRESET_TIMESTAMP_FORMATS = {
     "YYYY-MM-DD HH:MM:SS": "%Y-%m-%d %H:%M:%S",
     "YYYY/MM/DD HH:MM:SS": "%Y/%m/%d %H:%M:%S",
+    "YYYY/MM/DD HH:MM": "%Y/%m/%d %H:%M",
     "YYYY年MM月DD日 HH:MM:SS": "%Y年%m月%d日 %H:%M:%S",
     "YYYY-MM-DD": "%Y-%m-%d",
     "YYYYMMDDHHMMSS": "%Y%m%d%H%M%S",
