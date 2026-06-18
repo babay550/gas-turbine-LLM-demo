@@ -1,31 +1,40 @@
 name: gas-turbine
 services:
   backend:
-    image: gas-turbine-backend:v1.0
+    image: gas-turbine-backend-${ARCH_SUFFIX}:v20260617
     build:
       context: ..
       dockerfile: docker/backend/Dockerfile
+      args:
+        - ARCH_SUFFIX=${ARCH_SUFFIX}
     container_name: gas-turbine-backend
-    ports:
-      - "8000:8000"
+    #ports:
+    #  - "8000:8000"
     volumes:
       - ../backend/data:/app/data
       - ../backend/knowledge:/app/knowledge
       - ../backend/.env:/app/.env
     environment:
       - PYTHONPATH=/app
+      - OPENBLAS_NUM_THREADS=1
+    security_opt:
+      - seccomp=unconfined
     networks:
       - gas-app-network
     restart: unless-stopped
 
   frontend:
-    image: gas-turbine-frontend:v1.0
+    image: gas-turbine-frontend-${ARCH_SUFFIX}:v20260617
     build:
       context: ..
       dockerfile: docker/frontend/Dockerfile
+      args:
+        - ARCH_SUFFIX=${ARCH_SUFFIX}
     container_name: gas-turbine-frontend
     ports:
       - "18081:80"
+    volumes:
+      - ./frontend/nginx.conf:/etc/nginx/nginx.conf
     depends_on:
       - backend
     networks:

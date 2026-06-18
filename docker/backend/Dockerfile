@@ -1,4 +1,7 @@
-FROM python:3.11-slim
+# 声明变量，提供默认值
+ARG ARCH_SUFFIX=amd64
+
+FROM python-${ARCH_SUFFIX}:3.11-slim
 WORKDIR /app
 
 COPY backend/requirements.txt .
